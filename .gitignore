@@ -1,0 +1,8 @@
+
+c_c++/axi_test/riffa_axi
+c_c++/axi_test/riffa_axi_test
+
+c_c++/irq_test/irq_test
+
+fpga/altera/*/*/bit/*.sof
+fpga/xilinx/*/*/bit/*.bit
