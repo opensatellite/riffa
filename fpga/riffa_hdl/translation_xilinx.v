@@ -172,6 +172,7 @@ module translation_xilinx
     assign S_AXIS_TX_TDATA = TX_TLP;
     assign S_AXIS_TX_TVALID = TX_TLP_VALID;
     assign S_AXIS_TX_TLAST = TX_TLP_END_FLAG;
+    assign S_AXIS_TX_TUSER = 4'b0;
 
     // Configuration Interface
     assign CONFIG_COMPLETER_ID = {CFG_BUS_NUMBER,CFG_DEVICE_NUMBER,CFG_FUNCTION_NUMBER};
@@ -198,12 +199,14 @@ module translation_xilinx
             assign RX_TLP_START_FLAG = ~rRxTlpValid | rRxTlpEndFlag;
             assign RX_TLP_START_OFFSET = {clog2s(C_PCI_DATA_WIDTH/32){1'b0}};
             assign RX_TLP_END_OFFSET = 0;
+            assign RX_TLP_BAR_DECODE = M_AXIS_RX_TUSER[9:2];
             assign RX_TLP_END_FLAG = M_AXIS_RX_TLAST;
             assign S_AXIS_TX_TKEEP = 4'hF;
         end else if (C_PCI_DATA_WIDTH == 9'd64) begin : gen_xilinx_64
             assign RX_TLP_START_FLAG = ~rRxTlpValid | rRxTlpEndFlag;
             assign RX_TLP_START_OFFSET = {clog2s(C_PCI_DATA_WIDTH/32){1'b0}};
             assign RX_TLP_END_OFFSET = M_AXIS_RX_TKEEP[4];
+            assign RX_TLP_BAR_DECODE = M_AXIS_RX_TUSER[9:2];
             assign RX_TLP_END_FLAG = M_AXIS_RX_TLAST;
             assign S_AXIS_TX_TKEEP = {{4{TX_TLP_END_OFFSET | ~TX_TLP_END_FLAG}},4'hF};
         end else if (C_PCI_DATA_WIDTH == 9'd128) begin : gen_xilinx_128
@@ -211,6 +214,7 @@ module translation_xilinx
             assign RX_TLP_END_FLAG = M_AXIS_RX_TUSER[21];
             assign RX_TLP_START_FLAG = M_AXIS_RX_TUSER[14];
             assign RX_TLP_START_OFFSET = M_AXIS_RX_TUSER[13:12];
+            assign RX_TLP_BAR_DECODE = M_AXIS_RX_TUSER[9:2];
             assign S_AXIS_TX_TKEEP = {{4{~TX_TLP_END_FLAG | (TX_TLP_END_OFFSET == 2'b11)}},
                                       {4{~TX_TLP_END_FLAG | (TX_TLP_END_OFFSET >= 2'b10)}},
                                       {4{~TX_TLP_END_FLAG | (TX_TLP_END_OFFSET >= 2'b01)}},

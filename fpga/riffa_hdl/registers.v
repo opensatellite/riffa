@@ -37,6 +37,7 @@
 module registers
     #(parameter C_PCI_DATA_WIDTH = 128,
       parameter C_NUM_CHNL = 12,
+      parameter C_M_AXI_ADDR_WIDTH    = 16, // Match with BAR2 size
       parameter C_MAX_READ_REQ_BYTES = 512, // Max size of read requests (in bytes)
       parameter C_VENDOR = "ALTERA",
       parameter C_NUM_VECTORS = 2,
@@ -92,7 +93,30 @@ module registers
      output                                    TXC_META_EP,
      input                                     TXC_META_READY,
 
-     // Interface: Channel - WR
+     // Interface: BAR2 Channel - AXI4Lite
+     output aclk,
+     output aresetn,
+     output [C_M_AXI_ADDR_WIDTH-1:0] m_axi_awaddr,
+     output [2:0] m_axi_awprot,
+     output m_axi_awvalid,
+     input  m_axi_awready,
+     output [31:0] m_axi_wdata,
+     output [3:0] m_axi_wstrb,
+     output m_axi_wvalid,
+     input  m_axi_wready,
+     input  [1:0] m_axi_bresp,
+     input  m_axi_bvalid,
+     output m_axi_bready,
+     output [C_M_AXI_ADDR_WIDTH-1:0] m_axi_araddr,
+     output [2:0] m_axi_arprot,
+     output m_axi_arvalid,
+     input  m_axi_arready,
+     input  [31:0] m_axi_rdata,
+     input  [1:0] m_axi_rresp,
+     input  m_axi_rvalid,
+     output m_axi_rready,
+
+     // Interface: BAR0 Channel - WR
      output [31:0]                             CHNL_REQ_DATA, 
 
      output [C_NUM_CHNL-1:0]                   CHNL_SGRX_LEN_VALID,
@@ -104,7 +128,7 @@ module registers
      output [C_NUM_CHNL-1:0]                   CHNL_RX_LEN_VALID,
      output [C_NUM_CHNL-1:0]                   CHNL_RX_OFFLAST_VALID,
     
-     // Interface: Channel - RD
+     // Interface: BAR0 Channel - RD
      input [(`SIG_TXRLEN_W*C_NUM_CHNL)-1:0]    CHNL_TX_REQLEN,
      input [(`SIG_OFFLAST_W*C_NUM_CHNL)-1:0]   CHNL_TX_OFFLAST,
      input [(`SIG_TXDONELEN_W*C_NUM_CHNL)-1:0] CHNL_TX_DONELEN,
@@ -118,7 +142,7 @@ module registers
      output [C_NUM_CHNL-1:0]                   CHNL_RX_DONE_READY,
      output                                    CHNL_NAME_READY,
 
-     // Interface: Interrupt Vectors
+     // Interface: BAR0 Interrupt Vectors
      input [C_NUM_VECTORS*C_VECTOR_WIDTH-1:0]  INTR_VECTOR
      );
 
@@ -129,7 +153,7 @@ module registers
     localparam C_OUTPUT_STAGES = C_PIPELINE_OUTPUT > 0 ? 1:0;
     localparam C_INPUT_STAGES = C_PIPELINE_INPUT > 0 ? 1:0;
     localparam C_TXC_REGISTER_WIDTH = C_PCI_DATA_WIDTH + 2*(1 + clog2(C_PCI_DATA_WIDTH/32) + `SIG_FBE_W) + `SIG_LOWADDR_W + `SIG_TYPE_W + `SIG_LEN_W + `SIG_BYTECNT_W + `SIG_TAG_W + `SIG_REQID_W + `SIG_TC_W + `SIG_ATTR_W + 1;
-    localparam C_RXR_REGISTER_WIDTH = C_PCI_DATA_WIDTH + 2*(1 + clog2(C_PCI_DATA_WIDTH/32) + `SIG_FBE_W) + `SIG_ADDR_W + `SIG_TYPE_W + `SIG_LEN_W + `SIG_TAG_W + `SIG_REQID_W + `SIG_TC_W + `SIG_ATTR_W;
+    localparam C_RXR_REGISTER_WIDTH = C_PCI_DATA_WIDTH + 2*(1 + clog2(C_PCI_DATA_WIDTH/32) + `SIG_FBE_W) + `SIG_ADDR_W + `SIG_TYPE_W + `SIG_LEN_W + `SIG_TAG_W + `SIG_REQID_W + `SIG_TC_W + `SIG_ATTR_W + `SIG_BARDECODE_W;
     
     // The Mem/IO read/write address space should be at least 8 bits wide. This 
     // means we'll need at least 10 bits of BAR 0, at least 1024 bytes. The bottom
@@ -158,8 +182,8 @@ module registers
     // 1111 = Name of FPGA                                                  (Read only)
 
     wire [31:0]                                __wRdMemory[C_ADDR_RANGE-1:0];
-    wire [32*C_ADDR_RANGE-1:0]                 _wRdMemory;
-    wire [C_PCI_DATA_WIDTH-1:0]                wRdMemory[C_ARRAY_LENGTH-1:0];
+    //wire [32*C_ADDR_RANGE-1:0]                 _wRdMemory;
+    //wire [C_PCI_DATA_WIDTH-1:0]                wRdMemory[C_ARRAY_LENGTH-1:0];
 
     wire [C_PCI_DATA_WIDTH-1:0]                wRxrData;
     wire                                       wRxrDataValid;
@@ -174,6 +198,7 @@ module registers
     wire [`SIG_TAG_W-1:0]                      wRxrMetaTag;
     wire [`SIG_TYPE_W-1:0]                     wRxrMetaType;
     wire [`SIG_ADDR_W-1:0]                     wRxrMetaAddr;
+    wire [`SIG_BARDECODE_W-1:0]                wRxrMetaBarDecode;
     wire [`SIG_REQID_W-1:0]                    wRxrMetaRequesterId;
     wire [`SIG_LEN_W-1:0]                      wRxrMetaLength;
     
@@ -224,7 +249,8 @@ module registers
     genvar                                     channel;
     genvar                                     vector;
 
-    assign wReqChnl = wRxrMetaAddr[(C_FIELDS_WIDTH + 2) +:clog2s(C_NUM_CHNL)];
+    //this address is aligned, extract low bits directly
+    assign wReqChnl = wRxrMetaAddr[(C_FIELDS_WIDTH + 2) +:clog2s(C_NUM_CHNL)];  
     assign wReqField = wRxrMetaAddr[2 +: C_FIELDS_WIDTH];
     assign wChnlReqData[31:0] = wRxrData[32*wRxrDataStartOffset +: 32];
     
@@ -233,39 +259,178 @@ module registers
     assign __wRdMemory[`ADDR_INTR_VECTOR_0] = INTR_VECTOR[C_VECTOR_WIDTH*0 +: C_VECTOR_WIDTH];
     assign __wRdMemory[`ADDR_INTR_VECTOR_1] = INTR_VECTOR[C_VECTOR_WIDTH*1 +: C_VECTOR_WIDTH];
     assign __wRdMemory[`ADDR_FPGA_NAME] = {"    ",C_FPGA_NAME};
+    
+    wire [31:0] regOut = __wRdMemory[{wReqChnl,wReqField}];
+    wire regOp = wRxrMetaBarDecode[`TRLS_BAR0_BIT] & wRxrDataValid;
+    wire regRd = regOp & (wRxrMetaType == `TRLS_REQ_RD);
+    wire regWr = regOp & (wRxrMetaType == `TRLS_REQ_WR);
+    wire axiRd = wRxrMetaBarDecode[`TRLS_BAR2_BIT] & wRxrDataValid & (wRxrMetaType == `TRLS_REQ_RD);
+    wire axiWr = wRxrMetaBarDecode[`TRLS_BAR2_BIT] & wRxrDataValid & (wRxrMetaType == `TRLS_REQ_WR);
+    
+    wire axiRespValid;
+    wire [`SIG_LOWADDR_W-1:0] axiRespFifoMetaAddr;
+    wire [`SIG_TAG_W-1:0]     axiRespFifoMetaTag;
+    wire [`SIG_REQID_W-1:0]   axiRespFifoMetaRequesterId;
+    wire [`SIG_TC_W-1:0]      axiRespFifoMetaTc;
+    wire [`SIG_ATTR_W-1:0]    axiRespFifoMetaAttr;
+        
+    //-----------------pcie read interface
     /* verilator lint_on WIDTH */
-    assign wTxcData = {{(C_PCI_DATA_WIDTH-32){1'b0}},__wRdMemory[{wReqChnl,wReqField}]};
-    assign wTxcDataValid = wRxrDataValid & wRxrMetaType == `TRLS_REQ_RD;
     assign wTxcDataStartFlag = 1;
     assign wTxcDataStartOffset = 0;
     assign wTxcMetaFdwbe = 4'b1111;
     assign wTxcDataEndFlag = 1;
     assign wTxcDataEndOffset = 0;
     assign wTxcMetaLdwbe = 4'b0000;
-    assign wTxcMetaAddr = wRxrMetaAddr[`SIG_LOWADDR_W-1:0];
     assign wTxcMetaType = `TRLS_CPL_WD;
     assign wTxcMetaLength = 1;
     assign wTxcMetaByteCount = 4;
-    assign wTxcMetaTag = wRxrMetaTag;
-    assign wTxcMetaRequesterId = wRxrMetaRequesterId;
-    assign wTxcMetaTc = wRxrMetaTc;
-    assign wTxcMetaAttr = wRxrMetaAttr;
     assign wTxcMetaEp = 0;
+        
+    assign wTxcData = {{(C_PCI_DATA_WIDTH-32){1'b0}}, regRd ? regOut : m_axi_rdata};
+    assign wTxcDataValid       = regRd | axiRespValid;
+    assign wTxcMetaAddr        = regRd ? wRxrMetaAddr[`SIG_LOWADDR_W-1:0] : axiRespFifoMetaAddr;    
+    assign wTxcMetaTag         = regRd ? wRxrMetaTag         : axiRespFifoMetaTag;
+    assign wTxcMetaRequesterId = regRd ? wRxrMetaRequesterId : axiRespFifoMetaRequesterId;
+    assign wTxcMetaTc          = regRd ? wRxrMetaTc          : axiRespFifoMetaTc;
+    assign wTxcMetaAttr        = regRd ? wRxrMetaAttr        : axiRespFifoMetaAttr;
+    
+    //------------------AXI4Lite----------------- 
+    //global
+    assign aclk = CLK;
+    assign aresetn = ~RST_IN;
+    
+    //write addr + data
+    wire axiAWADDRFifoEmpty;
+    assign m_axi_awvalid = ~axiAWADDRFifoEmpty;
+    (* RAM_STYLE="DISTRIBUTED" *)
+    sync_fifo 
+        #(.C_WIDTH(C_M_AXI_ADDR_WIDTH), 
+          .C_DEPTH(8)) 
+    axiAWADDRFifo 
+      ( .CLK(CLK),
+        .RST(RST_IN),
+        .WR_DATA(wRxrMetaAddr[C_M_AXI_ADDR_WIDTH-1:0]), 
+        .WR_EN(axiWr),
+        .RD_DATA(m_axi_awaddr), 
+        .RD_EN(m_axi_awready), 
+        .FULL(), //dropped when full
+        .EMPTY(axiAWADDRFifoEmpty),  
+        .COUNT() );
+    
+    wire axiWDATAFifoEmpty;
+    assign m_axi_wvalid = ~axiWDATAFifoEmpty;
+    (* RAM_STYLE="DISTRIBUTED" *)
+    sync_fifo 
+        #(.C_WIDTH(32), 
+          .C_DEPTH(8)) 
+    axiWDATAFifo 
+      ( .CLK(CLK),
+        .RST(RST_IN),
+        .WR_DATA(wRxrData[32*wRxrDataStartOffset +: 32]), 
+        .WR_EN(axiWr),
+        .RD_DATA(m_axi_wdata), 
+        .RD_EN(m_axi_wready), 
+        .FULL(), //dropped when full
+        .EMPTY(axiWDATAFifoEmpty),  
+        .COUNT() );
+                    
+    assign m_axi_awprot = 3'b001; //Privileged, Non-secure, Data access
+    assign m_axi_wstrb = 4'b1111;
+    
+    //write response - not used (TODO: pcie report error)
+    //input  [1:0] m_axi_bresp;
+    //input  m_axi_bvalid;
+    assign m_axi_bready = 1;
+    
+    //read address
+    wire axiARADDRFifoEmpty;
+    assign m_axi_arvalid = ~axiARADDRFifoEmpty;
+    (* RAM_STYLE="DISTRIBUTED" *)
+    sync_fifo 
+        #(.C_WIDTH(C_M_AXI_ADDR_WIDTH), 
+          .C_DEPTH(8)) 
+    axiARADDRFifo 
+      ( .CLK(CLK),
+        .RST(RST_IN),
+        .WR_DATA(wRxrMetaAddr[C_M_AXI_ADDR_WIDTH-1:0]), 
+        .WR_EN(axiRd),
+        .RD_DATA(m_axi_araddr), 
+        .RD_EN(m_axi_arready), 
+        .FULL(), //dropped when full
+        .EMPTY(axiARADDRFifoEmpty),  
+        .COUNT() );
+    assign m_axi_arprot = 3'b001; //Privileged, Non-secure, Data access
+    
+    //read responsse
+    wire axiRespFifoEmpty;
+    assign axiRespValid = (m_axi_rresp == 2'b0) && m_axi_rvalid && (!axiRespFifoEmpty);
+    
+    assign m_axi_rready = ~regRd;
+    (* RAM_STYLE="DISTRIBUTED" *)
+    sync_fifo 
+        #(.C_WIDTH(`SIG_LOWADDR_W + `SIG_TAG_W + `SIG_REQID_W + `SIG_TC_W + `SIG_ATTR_W), 
+          .C_DEPTH(8)) 
+    axiRespFifo 
+        ( .CLK(CLK),
+          .RST(RST_IN),
+          .WR_DATA({wRxrMetaAddr[`SIG_LOWADDR_W-1:0], wRxrMetaTag, wRxrMetaRequesterId, wRxrMetaTc, wRxrMetaAttr}), 
+          .WR_EN(axiRd),
+          .RD_DATA({axiRespFifoMetaAddr, axiRespFifoMetaTag, axiRespFifoMetaRequesterId, axiRespFifoMetaTc, axiRespFifoMetaAttr}), 
+          .RD_EN(m_axi_rvalid), 
+          .FULL(), //dropped when full
+          .EMPTY(axiRespFifoEmpty),  
+          .COUNT() );
+    //Note: axi4lite slave must reply read request, thus we never drop axiRespFifo content.
 
+    //----------------LA for debug--------------------------
+    /*
+    chnl_ila ila_txc(
+        .clk(CLK),
+        .probe0(wTxcDataReady),
+        .probe1(wTxcDataValid),
+        .probe2(0),
+        .probe3(0),
+        .probe4({23'd0, wRxrMetaBarDecode}),
+        .probe5({56'd0, wTxcData[31:0], wTxcMetaAddr, wTxcMetaTag, wTxcMetaRequesterId, wTxcMetaTc, wTxcMetaAttr}),
+        .probe6(0),
+        .probe7(0),
+        .probe8(0),
+        .probe9(0)
+    );
+    
+    chnl_ila ila_rxr(
+        .clk(CLK),
+        .probe0(0),
+        .probe1(wRxrDataValid),
+        .probe2(0),
+        .probe3({22'd0, wRxrMetaLength}),
+        .probe4({7'd0, wRxrMetaRequesterId, wRxrMetaBarDecode}),
+        .probe5({36'd0, 
+                 wRxrDataStartFlag,  
+                 wRxrMetaAddr,
+                 wRxrMetaFdwbe, wRxrMetaLdwbe, 
+                 wRxrMetaTag, wRxrMetaType, wRxrMetaTc, wRxrMetaAttr}),
+        .probe6(0),
+        .probe7(0),
+        .probe8(wChnlReqData[31:0]),
+        .probe9(0)
+    );
+    */
+    //----------------Register readout----------------------
     generate            
         for(channel = 0; channel < C_NUM_CHNL ; channel = channel + 1) begin : gen__wRdMemory
-            
             assign __wRdMemory[{channel[27:0] , `ADDR_TX_LEN}] = CHNL_TX_REQLEN[32*channel +: 32];
             assign __wRdMemory[{channel[27:0] , `ADDR_TX_OFFLAST}] = CHNL_TX_OFFLAST[32*channel +: 32];
             assign __wRdMemory[{channel[27:0] , `ADDR_RX_LEN_XFERD}] = CHNL_RX_DONELEN[32*channel +: 32];            
             assign __wRdMemory[{channel[27:0] , `ADDR_TX_LEN_XFERD}] = CHNL_TX_DONELEN[32*channel +: 32];
         end
-        for(addr = 0 ; addr < C_ADDR_RANGE ; addr = addr + 1) begin : gen_wRdMemory
-            assign _wRdMemory[(addr*32) +: 32] = __wRdMemory[addr];
-        end
-        for(addr = 0 ; addr < C_ARRAY_LENGTH ; addr = addr + 1) begin : genwRdMemory
-            assign wRdMemory[addr]  = _wRdMemory[(addr*C_PCI_DATA_WIDTH) +: C_PCI_DATA_WIDTH];
-        end
+        //for(addr = 0 ; addr < C_ADDR_RANGE ; addr = addr + 1) begin : gen_wRdMemory
+        //    assign _wRdMemory[(addr*32) +: 32] = __wRdMemory[addr];
+        //end
+        //for(addr = 0 ; addr < C_ARRAY_LENGTH ; addr = addr + 1) begin : genwRdMemory
+        //    assign wRdMemory[addr]  = _wRdMemory[(addr*C_PCI_DATA_WIDTH) +: C_PCI_DATA_WIDTH];
+        //end
     endgenerate
 
     assign wChnlNameReady = wReqFieldDemux[`ADDR_FPGA_NAME];
@@ -287,14 +452,14 @@ module registers
                                           wRxrDataStartFlag, wRxrDataStartOffset, wRxrMetaFdwbe,
                                           wRxrDataEndFlag, wRxrDataEndOffset, wRxrMetaLdwbe,
                                           wRxrMetaAddr, wRxrMetaType, wRxrMetaLength, 
-                                          wRxrMetaTag, wRxrMetaRequesterId, wRxrMetaTc, wRxrMetaAttr}),
+                                          wRxrMetaTag, wRxrMetaBarDecode, wRxrMetaRequesterId, wRxrMetaTc, wRxrMetaAttr}),
          .RD_DATA_VALID                 (wRxrDataValid),
          // Inputs
          .WR_DATA                       ({RXR_DATA, 
                                           RXR_DATA_START_FLAG, RXR_DATA_START_OFFSET, RXR_META_FDWBE,
                                           RXR_DATA_END_FLAG, RXR_DATA_END_OFFSET, RXR_META_LDWBE,
                                           RXR_META_ADDR, RXR_META_TYPE, RXR_META_LENGTH,
-                                          RXR_META_TAG, RXR_META_REQUESTER_ID, RXR_META_TC, RXR_META_ATTR}),
+                                          RXR_META_TAG, RXR_META_BAR_DECODED, RXR_META_REQUESTER_ID, RXR_META_TC, RXR_META_ATTR}),
          .WR_DATA_VALID                 (RXR_DATA_VALID),
          .RD_DATA_READY                 (1),
          /*AUTOINST*/
@@ -313,7 +478,7 @@ module registers
          // Outputs
          .RD_DATA                      (wReqFieldDemux),
          // Inputs
-         .WR_DATA                      (wRxrDataValid),
+         .WR_DATA                      (regOp),
          .WR_SEL                       (wReqField)
          /*AUTOINST*/);
 
@@ -538,7 +703,7 @@ module registers
     txc_output_register
         (
          // Outputs
-         .WR_DATA_READY                 (),// Unconnected
+         .WR_DATA_READY                 (wTxcDataReady),
          .RD_DATA                       ({TXC_DATA, 
                                           TXC_DATA_START_FLAG, TXC_DATA_START_OFFSET, TXC_META_FDWBE,
                                           TXC_DATA_END_FLAG, TXC_DATA_END_OFFSET, TXC_META_LDWBE,

@@ -32,45 +32,30 @@
 # USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
 # DAMAGE.
 # ----------------------------------------------------------------------
-#-----------------------------------------------------------------------
-# Filename:            Makefile
-# Version:             1.0
-# Description:         Top-level makefile for building a RIFFA distribution
-# Author:              Dustin Richmond (@darichmond)
-#-----------------------------------------------------------------------
-include release.mk
-CURRENT_PATH := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
-RIFFA_ROOT_PATH := $(CURRENT_PATH)
+program_NAME := riffa_loopback riffa_axi
+program_C_SRCS := $(wildcard *.c)
+program_CXX_SRCS := $(wildcard *.cpp)
+program_C_OBJS := ${program_C_SRCS:.c=.o}
+program_CXX_OBJS := ${program_CXX_SRCS:.cpp=.o}
+program_OBJS := $(program_C_OBJS) $(program_CXX_OBJS)
+program_INCLUDE_DIRS :=
+program_LIBRARY_DIRS :=
+program_LIBRARIES := riffa
+CPPFLAGS += -g
 
-RELEASE_VER=2.2.2
-RELEASE_DIR=riffa_$(RELEASE_VER)
-RELEASE_PATH=$(CURRENT_PATH)/$(RELEASE_DIR)
-RELEASE_SRC_DIR=$(RELEASE_DIR)/source
-RELEASE_SRC_PATH=$(CURRENT_PATH)/$(RELEASE_SRC_DIR)
-RELEASE_DOC_DIR=$(RELEASE_DIR)/documentation
-RELEASE_DOC_PATH=$(CURRENT_PATH)/$(RELEASE_DOC_DIR)
-RELEASE_INSTALL_DIR=$(RELEASE_DIR)/install
-RELEASE_INSTALL_PATH=$(CURRENT_PATH)/$(RELEASE_INSTALL_DIR)
+CPPFLAGS += $(foreach includedir,$(program_INCLUDE_DIRS),-I$(includedir))
+LDFLAGS += $(foreach librarydir,$(program_LIBRARY_DIRS),-L$(librarydir))
+LDFLAGS += $(foreach library,$(program_LIBRARIES),-l$(library))
 
-VENDORS=altera xilinx
-SUBDIRS=c_c++ docs driver fpga java matlab python #install
+.PHONY: all clean distclean
 
-all-boards: 
-	$(MAKE) -C fpga $(VENDORS)
+all: $(program_NAME)
 
-$(RELEASE_DIR):
-	mkdir $@
-
-$(RELEASE_SRC_DIR): $(RELEASE_DIR) check-release
-	mkdir $@
-
-$(RELEASE_DOC_DIR): $(RELEASE_DIR) check-release
-	mkdir $@
-
-release: clean $(RELEASE_DIR) $(RELEASE_SRC_DIR) $(RELEASE_DOC_DIR) $(SUBDIRS) 
-
-$(SUBDIRS)::
-	make -C $@ $(MAKECMDGOALS) RELEASE_SRC_PATH=$(RELEASE_SRC_PATH) RELEASE_VER=$(RELEASE_VER) RIFFA_ROOT_PATH=$(RIFFA_ROOT_PATH) RELEASE_DOC_PATH=$(RELEASE_DOC_PATH)
+$(program_NAME): $(program_OBJS)
+	$(CC) $(CPPFLAGS) $(program_OBJS) -o $(program_NAME) $(LDFLAGS)
 
 clean:
-	rm -rf $(RELEASE_DIR)
+	@- $(RM) $(program_NAME)
+	@- $(RM) $(program_OBJS)
+
+distclean: clean

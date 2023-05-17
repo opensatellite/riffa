@@ -127,5 +127,29 @@ int fpga_list(fpga_info_list * list) {
 	return rc;
 }
 
+int fpga_axi_write(fpga_t * fpga, unsigned int offset, unsigned int val)
+{
+	fpga_axi_io axi;
+
+	axi.id = fpga->id;
+	axi.offset = offset;
+	axi.val = val;
+
+	return ioctl(fpga->fd, IOCTL_AXI_WRITE, &axi);
+}
+
+int fpga_axi_read(fpga_t * fpga, unsigned int offset, unsigned int *val)
+{
+	int ret;
+	fpga_axi_io axi;
+
+	axi.id = fpga->id;
+	axi.offset = offset;
+
+	ret = ioctl(fpga->fd, IOCTL_AXI_READ, &axi);
+	if(val) *val = axi.val;
+
+	return ret;
+}
 
 

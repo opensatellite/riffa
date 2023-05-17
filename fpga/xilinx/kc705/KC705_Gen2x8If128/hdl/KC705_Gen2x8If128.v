@@ -48,6 +48,8 @@
 module KC705_Gen2x8If128
     #(// Number of RIFFA Channels
       parameter C_NUM_CHNL = 1,
+      // AXI4Lite Address Bits, Match BAR2 Size
+      parameter C_M_AXI_ADDR_WIDTH = 16,
       // Number of PCIe Lanes
       parameter C_NUM_LANES =  8,
       // Settings from Vivado IP Generator
@@ -60,10 +62,11 @@ module KC705_Gen2x8If128
      input [(C_NUM_LANES - 1) : 0]  PCI_EXP_RXP,
      input [(C_NUM_LANES - 1) : 0]  PCI_EXP_RXN,
 
-     output [3:0]                   LED,
+     //output [3:0]                   LED,
      input                          PCIE_REFCLK_P,
      input                          PCIE_REFCLK_N,
-     input                          PCIE_RESET_N
+     input                          PCIE_RESET_N,
+     output                         PCIE_LINK_UP
      );
 
     wire                            pcie_refclk;
@@ -161,6 +164,27 @@ module KC705_Gen2x8If128
     wire [C_NUM_CHNL-1:0]                      chnl_tx_data_valid; 
     wire [C_NUM_CHNL-1:0]                      chnl_tx_data_ren;
 
+    wire ARESETN;
+    wire [C_M_AXI_ADDR_WIDTH-1:0] M_AXI_AWADDR;
+    wire [2:0] M_AXI_AWPROT;
+    wire M_AXI_AWVALID;
+    wire M_AXI_AWREADY;
+    wire [31:0] M_AXI_WDATA;
+    wire [3:0] M_AXI_WSTRB;
+    wire M_AXI_WVALID;
+    wire M_AXI_WREADY;
+    wire [1:0] M_AXI_BRESP;
+    wire M_AXI_BVALID;
+    wire M_AXI_BREADY;
+    wire [C_M_AXI_ADDR_WIDTH-1:0] M_AXI_ARADDR;
+    wire [2:0] M_AXI_ARPROT;
+    wire M_AXI_ARVALID;
+    wire M_AXI_ARREADY;
+    wire [31:0] M_AXI_RDATA;
+    wire [1:0] M_AXI_RRESP;
+    wire M_AXI_RVALID;
+    wire M_AXI_RREADY;
+
     genvar                                     chnl;
 
     assign cfg_turnoff_ok = 0;
@@ -176,6 +200,8 @@ module KC705_Gen2x8If128
     assign cfg_pciecap_interrupt_msgnum = 0;
     assign cfg_turnoff_ok = 0;
     assign cfg_pm_wake = 0;
+    
+    assign PCIE_LINK_UP = user_lnk_up;
 
     IBUF 
         #()  
@@ -191,6 +217,7 @@ module KC705_Gen2x8If128
          .I(PCIE_REFCLK_P), 
          .CEB(1'b0), 
          .IB(PCIE_REFCLK_N));
+         
 
     // Core Top Level Wrapper
 
@@ -306,6 +333,7 @@ module KC705_Gen2x8If128
           // Parameters
           .C_LOG_NUM_TAGS               (C_LOG_NUM_TAGS),
           .C_NUM_CHNL                   (C_NUM_CHNL),
+          .C_M_AXI_ADDR_WIDTH           (C_M_AXI_ADDR_WIDTH),
           .C_PCI_DATA_WIDTH             (C_PCI_DATA_WIDTH),
           .C_MAX_PAYLOAD_BYTES          (C_MAX_PAYLOAD_BYTES))
     riffa
@@ -320,14 +348,6 @@ module KC705_Gen2x8If128
          .S_AXIS_TX_TUSER               (s_axis_tx_tuser[`SIG_XIL_TX_TUSER_W-1:0]),
          .FC_SEL                        (fc_sel[`SIG_FC_SEL_W-1:0]),
          .RST_OUT                       (rst_out),
-         .CHNL_RX                       (chnl_rx[C_NUM_CHNL-1:0]),
-         .CHNL_RX_LAST                  (chnl_rx_last[C_NUM_CHNL-1:0]),
-         .CHNL_RX_LEN                   (chnl_rx_len[(C_NUM_CHNL*`SIG_CHNL_LENGTH_W)-1:0]),
-         .CHNL_RX_OFF                   (chnl_rx_off[(C_NUM_CHNL*`SIG_CHNL_OFFSET_W)-1:0]),
-         .CHNL_RX_DATA                  (chnl_rx_data[(C_NUM_CHNL*C_PCI_DATA_WIDTH)-1:0]),
-         .CHNL_RX_DATA_VALID            (chnl_rx_data_valid[C_NUM_CHNL-1:0]),
-         .CHNL_TX_ACK                   (chnl_tx_ack[C_NUM_CHNL-1:0]),
-         .CHNL_TX_DATA_REN              (chnl_tx_data_ren[C_NUM_CHNL-1:0]),
          // Inputs
          .M_AXIS_RX_TDATA               (m_axis_rx_tdata[C_PCI_DATA_WIDTH-1:0]),
          .M_AXIS_RX_TKEEP               (m_axis_rx_tkeep[(C_PCI_DATA_WIDTH/8)-1:0]),
@@ -348,53 +368,250 @@ module KC705_Gen2x8If128
          .CFG_INTERRUPT_RDY             (cfg_interrupt_rdy),
          .USER_CLK                      (user_clk),
          .USER_RESET                    (user_reset),
+         .RX_NP_OK                      (rx_np_ok),
+         .TX_CFG_GNT                    (tx_cfg_gnt),
+         .RX_NP_REQ                     (rx_np_req),
+         
          .CHNL_RX_CLK                   (chnl_rx_clk[C_NUM_CHNL-1:0]),
+         .CHNL_RX                       (chnl_rx[C_NUM_CHNL-1:0]),
          .CHNL_RX_ACK                   (chnl_rx_ack[C_NUM_CHNL-1:0]),
+         .CHNL_RX_LAST                  (chnl_rx_last[C_NUM_CHNL-1:0]),
+         .CHNL_RX_LEN                   (chnl_rx_len[(C_NUM_CHNL*`SIG_CHNL_LENGTH_W)-1:0]),
+         .CHNL_RX_OFF                   (chnl_rx_off[(C_NUM_CHNL*`SIG_CHNL_OFFSET_W)-1:0]),
+         .CHNL_RX_DATA                  (chnl_rx_data[(C_NUM_CHNL*C_PCI_DATA_WIDTH)-1:0]),
+         .CHNL_RX_DATA_VALID            (chnl_rx_data_valid[C_NUM_CHNL-1:0]),
          .CHNL_RX_DATA_REN              (chnl_rx_data_ren[C_NUM_CHNL-1:0]),
+         
          .CHNL_TX_CLK                   (chnl_tx_clk[C_NUM_CHNL-1:0]),
          .CHNL_TX                       (chnl_tx[C_NUM_CHNL-1:0]),
+         .CHNL_TX_ACK                   (chnl_tx_ack[C_NUM_CHNL-1:0]),
          .CHNL_TX_LAST                  (chnl_tx_last[C_NUM_CHNL-1:0]),
          .CHNL_TX_LEN                   (chnl_tx_len[(C_NUM_CHNL*`SIG_CHNL_LENGTH_W)-1:0]),
          .CHNL_TX_OFF                   (chnl_tx_off[(C_NUM_CHNL*`SIG_CHNL_OFFSET_W)-1:0]),
          .CHNL_TX_DATA                  (chnl_tx_data[(C_NUM_CHNL*C_PCI_DATA_WIDTH)-1:0]),
          .CHNL_TX_DATA_VALID            (chnl_tx_data_valid[C_NUM_CHNL-1:0]),
-         .RX_NP_OK                      (rx_np_ok),
-         .TX_CFG_GNT                    (tx_cfg_gnt),
-         .RX_NP_REQ                     (rx_np_req)
-         /*AUTOINST*/);
-
-    generate
-        for (chnl = 0; chnl < C_NUM_CHNL; chnl = chnl + 1) begin : test_channels
-            chnl_tester 
-                    #(
-                      .C_PCI_DATA_WIDTH(C_PCI_DATA_WIDTH)
-                      ) 
-            module1 
-                    (.CLK(user_clk),
-                     .RST(rst_out),    // riffa_reset includes riffa_endpoint resets
-                     // Rx interface
-                     .CHNL_RX_CLK(chnl_rx_clk[chnl]), 
-                     .CHNL_RX(chnl_rx[chnl]), 
-                     .CHNL_RX_ACK(chnl_rx_ack[chnl]), 
-                     .CHNL_RX_LAST(chnl_rx_last[chnl]), 
-                     .CHNL_RX_LEN(chnl_rx_len[32*chnl +:32]), 
-                     .CHNL_RX_OFF(chnl_rx_off[31*chnl +:31]), 
-                     .CHNL_RX_DATA(chnl_rx_data[C_PCI_DATA_WIDTH*chnl +:C_PCI_DATA_WIDTH]), 
-                     .CHNL_RX_DATA_VALID(chnl_rx_data_valid[chnl]), 
-                     .CHNL_RX_DATA_REN(chnl_rx_data_ren[chnl]),
-                     // Tx interface
-                     .CHNL_TX_CLK(chnl_tx_clk[chnl]), 
-                     .CHNL_TX(chnl_tx[chnl]), 
-                     .CHNL_TX_ACK(chnl_tx_ack[chnl]), 
-                     .CHNL_TX_LAST(chnl_tx_last[chnl]), 
-                     .CHNL_TX_LEN(chnl_tx_len[32*chnl +:32]), 
-                     .CHNL_TX_OFF(chnl_tx_off[31*chnl +:31]), 
-                     .CHNL_TX_DATA(chnl_tx_data[C_PCI_DATA_WIDTH*chnl +:C_PCI_DATA_WIDTH]), 
-                     .CHNL_TX_DATA_VALID(chnl_tx_data_valid[chnl]), 
-                     .CHNL_TX_DATA_REN(chnl_tx_data_ren[chnl])
-                     );    
-        end
-    endgenerate
+         .CHNL_TX_DATA_REN              (chnl_tx_data_ren[C_NUM_CHNL-1:0]),
+         
+         .USER_INTR                     (0),
+         // AXI4Lite Master
+         .ARESETN(ARESETN),
+         .M_AXI_AWADDR(M_AXI_AWADDR),
+         .M_AXI_AWPROT(M_AXI_AWPROT),
+         .M_AXI_AWVALID(M_AXI_AWVALID),
+         .M_AXI_AWREADY(M_AXI_AWREADY),
+         .M_AXI_WDATA(M_AXI_WDATA),
+         .M_AXI_WSTRB(M_AXI_WSTRB),
+         .M_AXI_WVALID(M_AXI_WVALID),
+         .M_AXI_WREADY(M_AXI_WREADY),
+         .M_AXI_BRESP(M_AXI_BRESP),
+         .M_AXI_BVALID(M_AXI_BVALID),
+         .M_AXI_BREADY(M_AXI_BREADY),
+         .M_AXI_ARADDR(M_AXI_ARADDR),
+         .M_AXI_ARPROT(M_AXI_ARPROT),
+         .M_AXI_ARVALID(M_AXI_ARVALID),
+         .M_AXI_ARREADY(M_AXI_ARREADY),
+         .M_AXI_RDATA(M_AXI_RDATA),
+         .M_AXI_RRESP(M_AXI_RRESP),
+         .M_AXI_RVALID(M_AXI_RVALID),
+         .M_AXI_RREADY(M_AXI_RREADY)
+                  /*AUTOINST*/);
+    
+    assign chnl_rx_clk[0] = user_clk;
+    assign chnl_tx_clk[0] = user_clk;
+    /*
+    assign chnl_rx_clk[1] = user_clk;
+    assign chnl_tx_clk[1] = user_clk;
+    */
+    wire [C_PCI_DATA_WIDTH-1:0] m_axis_ch0_tdata;
+    wire  m_axis_ch0_tlast;
+    wire  m_axis_ch0_tvalid;
+    wire  m_axis_ch0_tready;
+    wire [32:0] m_axis_ch0_tuser;
+    
+    wire [C_PCI_DATA_WIDTH-1:0] s_axis_ch0_tdata;
+    wire  s_axis_ch0_tlast;
+    wire  s_axis_ch0_tvalid;
+    wire  s_axis_ch0_tready;
+    wire  [32:0] s_axis_ch0_tuser;
+    
+    wire [31:0] ch0_rate_limit;
+    
+    /*
+    wire [C_PCI_DATA_WIDTH-1:0] m_axis_ch1_tdata;
+    wire  m_axis_ch1_tlast;
+    wire  m_axis_ch1_tvalid;
+    wire  m_axis_ch1_tready;
+    wire [32:0] m_axis_ch1_tuser;
+    
+    wire [C_PCI_DATA_WIDTH-1:0] s_axis_ch1_tdata;
+    wire  s_axis_ch1_tlast;
+    wire  s_axis_ch1_tvalid;
+    wire  s_axis_ch1_tready;
+    wire  [32:0] s_axis_ch1_tuser;
+    */
+    
+    axis_rate_limit #(
+        .DATA_WIDTH(C_PCI_DATA_WIDTH),
+        .KEEP_ENABLE(0),
+        .LAST_ENABLE(1),
+        .ID_ENABLE(0),
+        .DEST_ENABLE(0),
+        .USER_ENABLE(1),
+        .USER_WIDTH(33)
+    ) rate_limit (
+        .clk(user_clk),
+        .rst(rst_out),
+        .s_axis_tdata (m_axis_ch0_tdata),
+        .s_axis_tlast (m_axis_ch0_tlast),
+        .s_axis_tvalid(m_axis_ch0_tvalid),
+        .s_axis_tready(m_axis_ch0_tready),
+        .s_axis_tuser (m_axis_ch0_tuser),
+        .m_axis_tdata (s_axis_ch0_tdata),
+        .m_axis_tlast (s_axis_ch0_tlast),
+        .m_axis_tvalid(s_axis_ch0_tvalid),
+        .m_axis_tready(s_axis_ch0_tready),
+        .m_axis_tuser (s_axis_ch0_tuser),
+        .rate_num(10'd1),
+        .rate_denom(ch0_rate_limit),
+        .rate_by_frame(0)
+    );
+    
+    /*
+    assign s_axis_ch1_tdata = m_axis_ch1_tdata;
+    assign s_axis_ch1_tlast = m_axis_ch1_tlast;
+    assign s_axis_ch1_tvalid = m_axis_ch1_tvalid;
+    assign m_axis_ch1_tready = s_axis_ch1_tready;
+    assign s_axis_ch1_tuser = m_axis_ch1_tuser;
+     */
+    chnl2axis 
+            #(
+              .C_PCI_DATA_WIDTH(C_PCI_DATA_WIDTH),
+              .DEBUG(1)
+              ) 
+    axis_inst0 
+            (.CLK(user_clk),
+             .RST(rst_out),    // riffa_reset includes riffa_endpoint resets
+             // Rx interface
+             .CHNL_RX(chnl_rx[0]), 
+             .CHNL_RX_ACK(chnl_rx_ack[0]), 
+             .CHNL_RX_LAST(chnl_rx_last[0]), 
+             .CHNL_RX_LEN(chnl_rx_len[32*0 +:32]), 
+             .CHNL_RX_OFF(chnl_rx_off[31*0 +:31]), 
+             .CHNL_RX_DATA(chnl_rx_data[C_PCI_DATA_WIDTH*0 +:C_PCI_DATA_WIDTH]), 
+             .CHNL_RX_DATA_VALID(chnl_rx_data_valid[0]), 
+             .CHNL_RX_DATA_REN(chnl_rx_data_ren[0]),
+             // Tx interface
+             .CHNL_TX(chnl_tx[0]), 
+             .CHNL_TX_ACK(chnl_tx_ack[0]), 
+             .CHNL_TX_LAST(chnl_tx_last[0]), 
+             .CHNL_TX_LEN(chnl_tx_len[32*0 +:32]), 
+             .CHNL_TX_OFF(chnl_tx_off[31*0 +:31]), 
+             .CHNL_TX_DATA(chnl_tx_data[C_PCI_DATA_WIDTH*0 +:C_PCI_DATA_WIDTH]), 
+             .CHNL_TX_DATA_VALID(chnl_tx_data_valid[0]), 
+             .CHNL_TX_DATA_REN(chnl_tx_data_ren[0]),
+             // AXIS Master
+             .m_axis_out_tdata(m_axis_ch0_tdata),
+             .m_axis_out_tlast(m_axis_ch0_tlast),
+             .m_axis_out_tvalid(m_axis_ch0_tvalid),
+             .m_axis_out_tready(m_axis_ch0_tready),
+             .m_axis_out_tuser(m_axis_ch0_tuser),
+             // AXIS Slave
+             .s_axis_in_tdata(s_axis_ch0_tdata),
+             .s_axis_in_tlast(s_axis_ch0_tlast),
+             .s_axis_in_tvalid(s_axis_ch0_tvalid),
+             .s_axis_in_tready(s_axis_ch0_tready),
+             .s_axis_in_tuser(s_axis_ch0_tuser)
+             );    
+             /*
+     chnl2axis 
+             #(
+               .C_PCI_DATA_WIDTH(C_PCI_DATA_WIDTH),
+               .DEBUG(0)
+               ) 
+     axis_inst1 
+             (.CLK(user_clk),
+              .RST(rst_out),    // riffa_reset includes riffa_endpoint resets
+              // Rx interface
+              .CHNL_RX(chnl_rx[1]), 
+              .CHNL_RX_ACK(chnl_rx_ack[1]), 
+              .CHNL_RX_LAST(chnl_rx_last[1]), 
+              .CHNL_RX_LEN(chnl_rx_len[32*1 +:32]), 
+              .CHNL_RX_OFF(chnl_rx_off[31*1 +:31]), 
+              .CHNL_RX_DATA(chnl_rx_data[C_PCI_DATA_WIDTH*1 +:C_PCI_DATA_WIDTH]), 
+              .CHNL_RX_DATA_VALID(chnl_rx_data_valid[1]), 
+              .CHNL_RX_DATA_REN(chnl_rx_data_ren[1]),
+              // Tx interface
+              .CHNL_TX(chnl_tx[1]), 
+              .CHNL_TX_ACK(chnl_tx_ack[1]), 
+              .CHNL_TX_LAST(chnl_tx_last[1]), 
+              .CHNL_TX_LEN(chnl_tx_len[32*1 +:32]), 
+              .CHNL_TX_OFF(chnl_tx_off[31*1 +:31]), 
+              .CHNL_TX_DATA(chnl_tx_data[C_PCI_DATA_WIDTH*1 +:C_PCI_DATA_WIDTH]), 
+              .CHNL_TX_DATA_VALID(chnl_tx_data_valid[1]), 
+              .CHNL_TX_DATA_REN(chnl_tx_data_ren[1]),
+              // AXIS Master
+              .m_axis_out_tdata(m_axis_ch1_tdata),
+              .m_axis_out_tlast(m_axis_ch1_tlast),
+              .m_axis_out_tvalid(m_axis_ch1_tvalid),
+              .m_axis_out_tready(m_axis_ch1_tready),
+              .m_axis_out_tuser(m_axis_ch1_tuser),
+              // AXIS Slave
+              .s_axis_in_tdata(s_axis_ch1_tdata),
+              .s_axis_in_tlast(s_axis_ch1_tlast),
+              .s_axis_in_tvalid(s_axis_ch1_tvalid),
+              .s_axis_in_tready(s_axis_ch1_tready),
+              .s_axis_in_tuser(s_axis_ch1_tuser)
+              );    
+   */
+    axi_regs axi_regs_inst(
+         .S_AXI_ACLK(user_clk),
+         .S_AXI_ARESETN(ARESETN),
+         .S_AXI_AWADDR(M_AXI_AWADDR),
+         .S_AXI_AWPROT(M_AXI_AWPROT),
+         .S_AXI_AWVALID(M_AXI_AWVALID),
+         .S_AXI_AWREADY(M_AXI_AWREADY),
+         .S_AXI_WDATA(M_AXI_WDATA),
+         .S_AXI_WSTRB(M_AXI_WSTRB),
+         .S_AXI_WVALID(M_AXI_WVALID),
+         .S_AXI_WREADY(M_AXI_WREADY),
+         .S_AXI_BRESP(M_AXI_BRESP),
+         .S_AXI_BVALID(M_AXI_BVALID),
+         .S_AXI_BREADY(M_AXI_BREADY),
+         .S_AXI_ARADDR(M_AXI_ARADDR),
+         .S_AXI_ARPROT(M_AXI_ARPROT),
+         .S_AXI_ARVALID(M_AXI_ARVALID),
+         .S_AXI_ARREADY(M_AXI_ARREADY),
+         .S_AXI_RDATA(M_AXI_RDATA),
+         .S_AXI_RRESP(M_AXI_RRESP),
+         .S_AXI_RVALID(M_AXI_RVALID),
+         .S_AXI_RREADY(M_AXI_RREADY),
+         .slv_reg0(ch0_rate_limit)
+    );
+    /*
+    axi_ila axi_ila_inst(
+        .clk(user_clk),
+        .probe5(M_AXI_AWADDR),
+        .probe17(M_AXI_AWPROT),
+        .probe9(M_AXI_AWVALID),
+        .probe8(M_AXI_AWREADY),
+        .probe1(M_AXI_ARADDR),
+        .probe18(M_AXI_ARPROT),
+        .probe12(M_AXI_ARVALID),
+        .probe11(M_AXI_ARREADY),
+        .probe4(M_AXI_BREADY),
+        .probe2(M_AXI_BRESP),
+        .probe3(M_AXI_BVALID),
+        .probe10(M_AXI_RDATA),
+        .probe6(M_AXI_RREADY),
+        .probe13(M_AXI_RRESP),
+        .probe16(M_AXI_RVALID),
+        .probe14(M_AXI_WDATA),
+        .probe0(M_AXI_WREADY),
+        .probe15(M_AXI_WSTRB),
+        .probe7(M_AXI_WVALID)
+    );    
+    */
+             
 endmodule
 // Local Variables:
 // verilog-library-directories:("." "../../../engine/" "ultrascale/rx/" "ultrascale/tx/" "classic/rx/" "classic/tx/" "../../../riffa/" "../..")

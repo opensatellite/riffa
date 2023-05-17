@@ -1,0 +1,38 @@
+# How to Migrate to new board:
+1. for pcie core, run tcl:
+	set_property -dict [list 
+		CONFIG.Bar0_64bit {true}
+		CONFIG.Bar2_Enabled {true} 
+		CONFIG.Bar2_64bit {true} 
+		CONFIG.Bar2_Size {16} 
+		CONFIG.Xlnx_Ref_Board {None} 
+		CONFIG.Bar0_Scale {Kilobytes} 
+		CONFIG.Bar0_Size {1} 
+		CONFIG.Bar2_Type {Memory} 
+		CONFIG.Bar2_Scale {Kilobytes} 
+		CONFIG.Bar2_Size {16} 
+		] [get_ips PCIeGen2x4If128]
+2. for missing files, search and add them.
+
+# for KC705, enable bitstream compression, set cfg mode as master bpix16, SYNC TYPE 2 (Micron P30), CCLK 50MHz
+
+# AXI4LITE master interface added as BAR2
+# User interrupt added
+
+# rxr_engine_128.v add BAR_DECODED signal passing for AXI4Lite. 32 / 64 width interface modified but not tested.
+
+# rx_port_128.v CHNL falling too early, causing data corrpution. 
+module rx_port_reader modified: .TXN_DATA_FLUSHED(wMainFlushed & wMainDataEmpty),
+wait for wMainDataEmpty while waiting for data flushed
+
+# vivado 2018.2 bugfix
+first, set functions.vh as global include
+to use riffa code as RTL module in vivado, place riffa_wrapper.v in block design, file type verilog
+
+# verilog bugfix
+move these functions to functions.vh:
+* tlp_to_trellis_type
+* trellis_to_tlp_type
+* upkt_to_trellis_type
+* trellis_to_upkt_type
+

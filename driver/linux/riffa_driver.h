@@ -58,8 +58,9 @@
 
 // The major device number. We can't rely on dynamic registration because ioctls
 // need to know it.
-#define MAJOR_NUM 100
 #define DEVICE_NAME "riffa"
+#define DEVICE_IRQ_NAME	"riffa%d_irq%d"
+#define IOCTL_NUM 129
 #define VENDOR_ID0 0x10EE
 #define VENDOR_ID1 0x1172
 
@@ -73,6 +74,7 @@
 #define NUM_FPGAS					5 	// max # of FPGAs to support in a single PC
 #define MAX_CHNLS					12	// max # of channels per FPGA
 #define MAX_BUS_WIDTH_PARAM			4	// max bus width parameter
+#define USER_IRQS					  2    // # of user irqs, note irq 2 and 3 only works with num_chnl >= 6
 #define SG_BUF_SIZE					(4*1024)	// size of shared SG buffer
 #define SG_ELEMS					200 // # of SG elements to transfer at a time
 #define SPILL_BUF_SIZE				(4*1024)	// size of shared spill common buffer
@@ -109,6 +111,14 @@ struct fpga_chnl_io
 };
 typedef struct fpga_chnl_io fpga_chnl_io;
 
+struct fpga_axi_io
+{
+	int id;
+	unsigned int offset;
+	unsigned int val;
+};
+typedef struct fpga_axi_io fpga_axi_io;
+
 struct fpga_info_list
 {
 	int num_fpgas;
@@ -121,11 +131,12 @@ struct fpga_info_list
 typedef struct fpga_info_list fpga_info_list;
 
 // IOCTLs
-#define IOCTL_SEND _IOW(MAJOR_NUM, 1, fpga_chnl_io *)
-#define IOCTL_RECV _IOR(MAJOR_NUM, 2, fpga_chnl_io *)
-#define IOCTL_LIST _IOR(MAJOR_NUM, 3, fpga_info_list *)
-#define IOCTL_RESET _IOW(MAJOR_NUM, 4, int)
-
+#define IOCTL_SEND _IOW(IOCTL_NUM, 1, fpga_chnl_io *)
+#define IOCTL_RECV _IOR(IOCTL_NUM, 2, fpga_chnl_io *)
+#define IOCTL_LIST _IOR(IOCTL_NUM, 3, fpga_info_list *)
+#define IOCTL_RESET _IOW(IOCTL_NUM, 4, int)
+#define IOCTL_AXI_WRITE _IOW(IOCTL_NUM, 5, fpga_axi_io *)
+#define IOCTL_AXI_READ  _IOR(IOCTL_NUM, 6, fpga_axi_io *)
 
 
 #endif

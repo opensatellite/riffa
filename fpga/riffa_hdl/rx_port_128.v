@@ -386,7 +386,7 @@ rx_port_reader #(.C_DATA_WIDTH(C_DATA_WIDTH), .C_FIFO_DEPTH(C_MAIN_FIFO_DEPTH), 
 	.TXN_ERR(wTxnErr),
 	.TXN_DONE_ACK(TXN_DONE_ACK),
 	.TXN_DATA_FLUSH(wMainFlush),
-	.TXN_DATA_FLUSHED(wMainFlushed),
+	.TXN_DATA_FLUSHED(wMainFlushed & wMainDataEmpty),
 	.RX_REQ(wMainReq),
 	.RX_ADDR(wMainReqAddr),
 	.RX_LEN(wMainReqLen),
@@ -437,8 +437,6 @@ rx_port_channel_gate #(.C_DATA_WIDTH(C_DATA_WIDTH)) gate (
 );
 
 
-
-/*
 reg [31:0] rCounter=0;
 always @ (posedge CLK) begin
 	if (RST)
@@ -446,8 +444,78 @@ always @ (posedge CLK) begin
 	else
 		rCounter <= #1 (RX_REQ_ACK ? rCounter + 1 : rCounter);
 end
+/*
+ila_0 rx_port_ila(
+    .clk(CLK),
+    .probe0({   //total 91
+        wChnlRx,
+        wChnlRxLast,
+        wChnlRxRecvd,
+        wChnlRxAckRecvd,
+        MAIN_DATA_EN, // 3
+        SG_RX_DONE, // 1
+        SG_RX_DATA_EN, // 3
+        wSgRxDataRen, // 1
+        wSgRxDataEmpty, // 1
+        wSgRst, // 1
+        SG_RST, // 1
+        wPackedSgRxDone, // 1
+        wSgRxRst, // 1
+        wSgRxFlushed, // 1
+        wSgRxFlush, // 1
+        SG_RX_BUF_ADDR_LO_VALID, // 1
+        SG_RX_BUF_ADDR_HI_VALID, // 1 
+        SG_RX_BUF_LEN_VALID, // 1
+        rCounter, // 32
+        RX_REQ_TAG, // 2
+        RX_REQ_ACK, // 1
+        RX_REQ, // 1
+        wSgElemRen, 
+        wSgTxReqProc, // 1
+        wSgTxReq, // 1
+        wSgRxReqProc, // 1
+        wSgRxReqLen, // 10
+        RX_REQ_LEN, // 10
+        wSgRxReq, // 1
+        wMainReqProc, // 1
+        wMainReq, // 1
+        wReqAck, // 1
+        wTxnErr, // 1
+        SG_TX_BUF_ADDR_HI_VALID,
+        SG_TX_BUF_LEN_VALID,
+        TXN_OFF_LAST_VALID, // 1
+        TXN_LEN_VALID}),    
+    .probe1(SG_RX_DATA),
+    .probe2(MAIN_DATA),
+    .probe3({RX_REQ_ADDR, wMainReqAddr}),
+    .probe4(wChnlRxConsumed)
+);
 
-
+ila_0 rx_port_mainfifo_ila (
+    .clk(CLK),
+    .probe0(wPackedMainData),
+    .probe1({
+        rRst,
+        wSgRst,
+        wTxnErr,
+        TXN_DONE,
+        wMainDataRen,
+        wMainDataEmpty,
+        wPackedMainWen,
+        wPackedMainFull,
+        CHNL_RX,
+        CHNL_RX_ACK,
+        CHNL_RX_LAST,
+        CHNL_RX_DATA_VALID,
+        CHNL_RX_DATA_REN
+        }),
+    .probe2(CHNL_RX_DATA),
+    .probe3(wMainData),
+    .probe4(0)
+);
+*/
+                        
+/*
 wire [35:0] wControl0;
 chipscope_icon_1 cs_icon(
 	.CONTROL0(wControl0)

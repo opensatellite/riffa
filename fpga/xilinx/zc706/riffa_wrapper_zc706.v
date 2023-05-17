@@ -48,6 +48,8 @@
 module riffa_wrapper_zc706
     #(// Number of RIFFA Channels
       parameter C_NUM_CHNL = 1,
+      parameter C_NUM_USER_INTR = 1,
+      parameter C_M_AXI_ADDR_WIDTH = 16,
       // Bit-Width from Vivado IP Generator
       parameter C_PCI_DATA_WIDTH = 128,
       // 4-Byte Name for this FPGA
@@ -92,9 +94,10 @@ module riffa_wrapper_zc706
      input                                        CFG_INTERRUPT_RDY,
      output                                       CFG_INTERRUPT,
 
+     (* X_INTERFACE_PARAMETER = "ASSOCIATED_BUSIF M_AXI:M_AXIS_RX:S_AXIS_TX, ASSOCIATED_RESET ARESETN, FREQ_HZ 250000000" *)
+     (* X_INTERFACE_INFO = "xilinx.com:signal:clock:1.0 USER_CLK CLK" *)
      input                                        USER_CLK,
      input                                        USER_RESET,
-
     
      // RIFFA Interface Signals
      output                                       RST_OUT,
@@ -116,8 +119,35 @@ module riffa_wrapper_zc706
      input [(C_NUM_CHNL*`SIG_CHNL_OFFSET_W)-1:0]  CHNL_TX_OFF, // Channel write offset
      input [(C_NUM_CHNL*C_PCI_DATA_WIDTH)-1:0]    CHNL_TX_DATA, // Channel write data
      input [C_NUM_CHNL-1:0]                       CHNL_TX_DATA_VALID, // Channel write data valid
-     output [C_NUM_CHNL-1:0]                      CHNL_TX_DATA_REN); // Channel write data has been recieved
+     output [C_NUM_CHNL-1:0]                      CHNL_TX_DATA_REN, // Channel write data has been recieved
      
+     input [C_NUM_USER_INTR-1:0]                  USER_INTR,
+     
+      // Interface: BAR2 Channel - AXI4Lite
+      (* X_INTERFACE_PARAMETER = "POLARITY ACTIVE_LOW" *)
+      (* X_INTERFACE_INFO = "xilinx.com:signal:reset:1.0 ARESETN RST" *)
+      output ARESETN,
+      output [C_M_AXI_ADDR_WIDTH-1:0] M_AXI_AWADDR,
+      output [2:0] M_AXI_AWPROT,
+      output M_AXI_AWVALID,
+      input  M_AXI_AWREADY,
+      output [31:0] M_AXI_WDATA,
+      output [3:0] M_AXI_WSTRB,
+      output M_AXI_WVALID,
+      input  M_AXI_WREADY,
+      input  [1:0] M_AXI_BRESP,
+      input  M_AXI_BVALID,
+      output M_AXI_BREADY,
+      output [C_M_AXI_ADDR_WIDTH-1:0] M_AXI_ARADDR,
+      output [2:0] M_AXI_ARPROT,
+      output M_AXI_ARVALID,
+      input  M_AXI_ARREADY,
+      input  [31:0] M_AXI_RDATA,
+      input  [1:0] M_AXI_RRESP,
+      input  M_AXI_RVALID,
+      output M_AXI_RREADY
+    ); 
+
     localparam C_FPGA_NAME = "REGT"; // This is not yet exposed in the driver
     localparam C_MAX_READ_REQ_BYTES = C_MAX_PAYLOAD_BYTES * 2;
     // ALTERA, XILINX or ULTRASCALE
@@ -128,10 +158,8 @@ module riffa_wrapper_zc706
     localparam C_PIPELINE_INPUT = 1;
     localparam C_DEPTH_PACKETS = 4;
     
-
     wire                                          clk;
     wire                                          rst_in;
-
     wire                                          done_txc_rst;
     wire                                          done_txr_rst;
     wire                                          done_rxr_rst;
@@ -288,6 +316,27 @@ module riffa_wrapper_zc706
     reg                                           rRxTlpValid;
     reg                                           rRxTlpEndFlag;
 
+    wire                                          aclk, aresetn;
+    wire [C_M_AXI_ADDR_WIDTH-1:0]                 s_axi_awaddr;
+    wire [2:0]                                    s_axi_awprot;
+    wire                                          s_axi_awvalid;
+    wire                                          s_axi_awready;
+    wire [31:0]                                   s_axi_wdata;
+    wire [3:0]                                    s_axi_wstrb;
+    wire                                          s_axi_wvalid;
+    wire                                          s_axi_wready;
+    wire [1:0]                                    s_axi_bresp;
+    wire                                          s_axi_bvalid;
+    wire                                          s_axi_bready;
+    wire [C_M_AXI_ADDR_WIDTH-1:0]                 s_axi_araddr;
+    wire [2:0]                                    s_axi_arprot;
+    wire                                          s_axi_arvalid;
+    wire                                          s_axi_arready;
+    wire [31:0]                                   s_axi_rdata;
+    wire [1:0]                                    s_axi_rresp;
+    wire                                          s_axi_rvalid;
+    wire                                          s_axi_rready;
+
     assign clk = USER_CLK;
     assign rst_in = USER_RESET;
 
@@ -414,6 +463,7 @@ module riffa_wrapper_zc706
          .TXR_DATA_READY                (txr_data_ready),
          .TXR_META_READY                (txr_meta_ready),
          .TXR_SENT                      (txr_sent),
+
          .RST_LOGIC                     (RST_OUT),
          // Unconnected Outputs
          .TX_TLP                        (tx_tlp),
@@ -513,6 +563,8 @@ module riffa_wrapper_zc706
           // Parameters
           .C_PCI_DATA_WIDTH             (C_PCI_DATA_WIDTH),
           .C_NUM_CHNL                   (C_NUM_CHNL),
+          .C_M_AXI_ADDR_WIDTH           (C_M_AXI_ADDR_WIDTH),
+          .C_NUM_USER_INTR              (C_NUM_USER_INTR),
           .C_MAX_READ_REQ_BYTES         (C_MAX_READ_REQ_BYTES),
           .C_VENDOR                     (C_VENDOR),
           .C_FPGA_NAME                  (C_FPGA_NAME),
@@ -640,9 +692,33 @@ module riffa_wrapper_zc706
          .CHNL_TX_LEN                   (CHNL_TX_LEN[(C_NUM_CHNL*32)-1:0]),
          .CHNL_TX_OFF                   (CHNL_TX_OFF[(C_NUM_CHNL*31)-1:0]),
          .CHNL_TX_DATA                  (CHNL_TX_DATA[(C_NUM_CHNL*C_PCI_DATA_WIDTH)-1:0]),
-         .CHNL_TX_DATA_VALID            (CHNL_TX_DATA_VALID[C_NUM_CHNL-1:0]));
+         .CHNL_TX_DATA_VALID            (CHNL_TX_DATA_VALID[C_NUM_CHNL-1:0]),
+         
+         .USER_INTR                     (USER_INTR),
+         // AXI4Lite Master
+         .aresetn(ARESETN),
+         .m_axi_awaddr(M_AXI_AWADDR),
+         .m_axi_awprot(M_AXI_AWPROT),
+         .m_axi_awvalid(M_AXI_AWVALID),
+         .m_axi_awready(M_AXI_AWREADY),
+         .m_axi_wdata(M_AXI_WDATA),
+         .m_axi_wstrb(M_AXI_WSTRB),
+         .m_axi_wvalid(M_AXI_WVALID),
+         .m_axi_wready(M_AXI_WREADY),
+         .m_axi_bresp(M_AXI_BRESP),
+         .m_axi_bvalid(M_AXI_BVALID),
+         .m_axi_bready(M_AXI_BREADY),
+         .m_axi_araddr(M_AXI_ARADDR),
+         .m_axi_arprot(M_AXI_ARPROT),
+         .m_axi_arvalid(M_AXI_ARVALID),
+         .m_axi_arready(M_AXI_ARREADY),
+         .m_axi_rdata(M_AXI_RDATA),
+         .m_axi_rresp(M_AXI_RRESP),
+         .m_axi_rvalid(M_AXI_RVALID),
+         .m_axi_rready(M_AXI_RREADY));
 
 endmodule
 // Local Variables:
 // verilog-library-directories:("../../riffa_hdl/")
 // End:
+

@@ -486,10 +486,10 @@ chipscope_icon_1 cs_icon(
 );
 
 chipscope_ila_t8_512 a0(
-	.CLK(CLK), 
-	.CONTROL(wControl0), 
-	.TRIG0({rTxState[6] | rTxState[7] | rTxSent, rAckCount[6:0]}),
-	.DATA({280'd0,
+	.clk(CLK), 
+	//.CONTROL(wControl0), 
+	.probe0({rTxState[6] | rTxState[7] | rTxSent, rAckCount[6:0]}),
+	.probe1({280'd0,
 			NEW_TXN_WORDS_RECVD, // 32
 			rSendingWords, // 32
 			rAvail, // 1

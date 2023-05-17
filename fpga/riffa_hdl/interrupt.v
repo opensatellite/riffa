@@ -47,7 +47,8 @@
 
 `timescale 1ns/1ns
 module interrupt #(
-	parameter C_NUM_CHNL = 4'd12
+	parameter C_NUM_CHNL = 4'd12,
+	parameter C_NUM_USER_INTR = 1'd1
 )
 (
 	input CLK,
@@ -57,6 +58,7 @@ module interrupt #(
 	input [C_NUM_CHNL-1:0] TX_TXN,			// New tx_port transaction
 	input [C_NUM_CHNL-1:0] TX_SG_BUF_RECVD,	// The scatter gather data for a tx_port transaction has been read
 	input [C_NUM_CHNL-1:0] TX_TXN_DONE,		// The tx_port transaction is done
+    input [C_NUM_USER_INTR-1:0] USER_INTR,                  // User interrupt input
 	input VECT_0_RST,						// Interrupt vector 0 reset
 	input VECT_1_RST,						// Interrupt vector 1 reset
 	input [31:0] VECT_RST,					// Interrupt vector reset value
@@ -128,10 +130,10 @@ generate
 			assign wVect1[(5*(i-6))+4] = 1'b0;
 		end	
 	end
-	assign wVect0[30] = 1'b0;
-	assign wVect0[31] = 1'b0;
-	assign wVect1[30] = 1'b0;
-	assign wVect1[31] = 1'b0;
+	assign wVect0[30] = (C_NUM_USER_INTR >= 1) ? USER_INTR[0] : 0;
+	assign wVect0[31] = (C_NUM_USER_INTR >= 2) ? USER_INTR[1] : 0;
+	assign wVect1[30] = (C_NUM_USER_INTR >= 3) ? USER_INTR[2] : 0;
+	assign wVect1[31] = (C_NUM_USER_INTR >= 4) ? USER_INTR[3] : 0;
 endgenerate
 
 // Interrupt controller

@@ -113,6 +113,16 @@ int fpga_recv(fpga_t * fpga, int chnl, void * data, int len, long long timeout);
  */
 void fpga_reset(fpga_t * fpga);
 
+/**
+ * Write to a FPGA axi4lite register
+ */
+int fpga_axi_write(fpga_t * fpga, unsigned int offset, unsigned int val);
+
+/**
+ * Read from a FPGA axi4lite register
+ */
+int fpga_axi_read(fpga_t * fpga, unsigned int offset, unsigned int *val);
+
 #ifdef __cplusplus
 }
 #endif

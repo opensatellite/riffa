@@ -46,7 +46,7 @@
 NAME := riffa
 VENDOR_ID0 := 10EE
 VENDOR_ID1 := 1172
-MAJNUM := 100
+IOCNUM := 129
 
 # Build variables
 KVER := $(shell uname -r)
@@ -61,6 +61,13 @@ LIB_VER := $(LIB_VER_MAJ).$(LIB_VER_MIN)
 DRVR_HDR := riffa_driver.h
 DBUGVAL := DBUG
 
+INSTALL_PREFIX := /usr/local
+LIB_DIR := $(INSTALL_PREFIX)/lib
+HDR_DIR := $(INSTALL_PREFIX)/include
+LOAD_ON_STARTUP = 1
+INSTALL_UDEV_RULES = 1
+INSTALL_LDCONF = 0
+
 obj-m += $(NAME).o
 $(NAME)-y := riffa_driver.o circ_queue.o
 
@@ -73,12 +80,12 @@ define assert-not-null
 endef
 define assert-variables
 	$(call assert-not-null,NAME)
-	$(call assert-not-null,MAJNUM)
+	$(call assert-not-null,IOCNUM)
 	$(call assert-not-null,VENDOR_ID0)
 	$(call assert-not-null,VENDOR_ID1)
 	@printf "Compiling driver for kernel: %s with the following values\n" $(KVER)
 	@printf "     NAME: '%s'\n" $(NAME)
-	@printf "   MAJNUM: '%s'\n" $(MAJNUM)
+	@printf "   IOCNUM: '%s'\n" $(IOCNUM)
 	@printf "VENDOR_ID0: '%s'\n" $(VENDOR_ID0)
 	@printf "VENDOR_ID1: '%s'\n" $(VENDOR_ID1)
 	@printf "\n"
@@ -92,13 +99,13 @@ builddvr: $(NAME).ko $(NAME).so.$(LIB_VER)
 
 $(NAME).ko: *.c *.h
 	$(call assert-variables)
-	sed -i 's/#define MAJOR_NUM [^\n]*/#define MAJOR_NUM $(MAJNUM)/g' $(DRVR_HDR)
+	sed -i 's/#define IOCTL_NUM [^\n]*/#define IOCTL_NUM $(IOCNUM)/g' $(DRVR_HDR)
 	sed -i 's/#define DEVICE_NAME [^\n]*/#define DEVICE_NAME "$(NAME)"/g' $(DRVR_HDR)
 	sed -i 's/#define VENDOR_ID0 [^\n]*/#define VENDOR_ID0 0x$(VENDOR_ID0)/g' $(DRVR_HDR)
 	sed -i 's/#define VENDOR_ID1 [^\n]*/#define VENDOR_ID1 0x$(VENDOR_ID1)/g' $(DRVR_HDR)
 	sed -i 's/#define DEBUG [^\n]*/#define DBUG 1/g' $(DRVR_HDR)
 	sed -i 's/#define DBUG [^\n]*/#define $(DBUGVAL) 1/g' $(DRVR_HDR)
-	make -C $(KDIR) SUBDIRS=`pwd` modules
+	make -C $(KDIR) M=$(PWD) modules
 	rm -rf $(LIB_OBJS)
 
 $(NAME).so.$(LIB_VER): $(LIB_OBJS)
@@ -114,36 +121,59 @@ unload:
 	rmmod $(NAME)
 
 clean:
-	rm -Rf *.ko *.cmd *.o *.so *.so.* .*.cmd Module.symvers Module.markers modules.order *.mod.c .tmp_versions
+	make -C $(KDIR) M=$(PWD) clean
+	rm -Rf *.ko *.cmd *.o *.so *.so.* .*.cmd Module.symvers Module.markers modules.order *.mod.c .tmp_versions *.conf
 
 setup:
-	if [ -f "$(RHR)" ]; then yum install kernel-devel-`uname -r`;\
+	@if [ -f "$(RHR)" ]; then yum install kernel-devel-`uname -r`;\
 	else apt-get install linux-headers-`uname -r`; fi
 
-install: $(NAME).so.$(LIB_VER) $(NAME).ko 
-	mkdir -p /lib/modules/$(KVER)/kernel/drivers/$(NAME)
-	cp $(NAME).ko /lib/modules/$(KVER)/kernel/drivers/$(NAME)/
-	if [ -f "$(RHR)" ]; then\
-		printf "%b\n" "#!/bin/sh\nexec /sbin/modprobe $(NAME) >/dev/null 2>&1" > /etc/sysconfig/modules/$(NAME).modules;\
-		chmod 755 /etc/sysconfig/modules/$(NAME).modules;\
-	else\
-		if ! grep -Fxq "$(NAME)" /etc/modules; then echo "$(NAME)" >> /etc/modules; fi;\
+install_library: $(NAME).so.$(LIB_VER) 
+	@if [ $(INSTALL_LDCONF) -gt 0 ]; then\
+		@echo "Add LIB_DIR to ld search path";\
+		printf "$(LIB_DIR)\n" > $(NAME).conf;\
+		mv $(NAME).conf /etc/ld.so.conf.d/;\
 	fi
-	printf "%b\n" "KERNEL==\"$(NAME)\", MODE=\"777\", GROUP=\"root\"" > /etc/udev/rules.d/99-$(NAME).rules
-	printf "/usr/local/lib\n" > $(NAME).conf
-	mv $(NAME).conf /etc/ld.so.conf.d/
-	cp $(DRVR_HDR) /usr/local/include/
-	cp $(LIB_HDR) /usr/local/include/
-	mv lib$(NAME).so.1.0 /usr/local/lib
-	ln -sf /usr/local/lib/lib$(NAME).so.$(LIB_VER) /usr/local/lib/lib$(NAME).so.$(LIB_VER_MAJ)
-	ln -sf /usr/local/lib/lib$(NAME).so.$(LIB_VER) /usr/local/lib/lib$(NAME).so
+	
+	@echo "install header files"
+	cp $(DRVR_HDR) $(HDR_DIR)
+	cp $(LIB_HDR) $(HDR_DIR)
+	
+	@echo "install shared object"
+	mv lib$(NAME).so.1.0 $(LIB_DIR)
+	ln -sf $(LIB_DIR)/lib$(NAME).so.$(LIB_VER) $(LIB_DIR)/lib$(NAME).so.$(LIB_VER_MAJ)
+	ln -sf $(LIB_DIR)/lib$(NAME).so.$(LIB_VER) $(LIB_DIR)/lib$(NAME).so
 	ldconfig
+
+install: $(NAME).ko install_library
+	@if [ $(LOAD_ON_STARTUP) -gt 0 ]; then\
+		# Load kernel module on system startup\
+		mkdir -p /lib/modules/$(KVER)/kernel/drivers/$(NAME);\
+		cp $(NAME).ko /lib/modules/$(KVER)/kernel/drivers/$(NAME)/;\
+		if [ -f "$(RHR)" ]; then\
+			# Create /etc/sysconfig/modules/$(NAME).modules\
+			printf "%b\n" "#!/bin/sh\nexec /sbin/modprobe $(NAME) >/dev/null 2>&1" > /etc/sysconfig/modules/$(NAME).modules;\
+			chmod 755 /etc/sysconfig/modules/$(NAME).modules;\
+		else\
+			if ! grep -Fxq "$(NAME)" /etc/modules; then\
+				# Append $(NAME) to /etc/modules\
+				echo "$(NAME)" >> /etc/modules;\
+			fi;\
+		fi;\
+	fi
+
+	# install udev rules
+	@if [ $(INSTALL_UDEV_RULES) -gt 0 ]; then \
+		# Install udev rules\
+		printf "%b\n" "KERNEL==\"$(NAME)\", MODE=\"777\", GROUP=\"root\"" > /etc/udev/rules.d/99-$(NAME).rules;\
+	fi
+	
 	depmod
 
 uninstall: 
-	rm -f /usr/local/lib/lib$(NAME).so*
-	rm -f /usr/local/include/$(LIB_HDR)
-	rm -f /usr/local/include/$(DRVR_HDR)
+	rm -f $(LIB_DIR)/lib$(NAME).so*
+	rm -f $(HDR_DIR)/$(LIB_HDR)
+	rm -f $(HDR_DIR)/$(DRVR_HDR)
 	rm -f /etc/ld.so.conf.d/$(NAME).conf
 	rm -rf /lib/modules/$(KVER)/kernel/drivers/$(NAME)
 	rm -f /etc/udev/rules.d/99-$(NAME).rules

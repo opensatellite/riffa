@@ -53,9 +53,7 @@ module chnl_tester #(
 (
 	input CLK,
 	input RST,
-	output CHNL_RX_CLK,
-	output CHNL_TX_CLK, 
-         
+	output CHNL_RX_CLK, 
 	input CHNL_RX, 
 	output CHNL_RX_ACK, 
 	input CHNL_RX_LAST, 
@@ -65,6 +63,7 @@ module chnl_tester #(
 	input CHNL_RX_DATA_VALID, 
 	output CHNL_RX_DATA_REN,
 	
+	output CHNL_TX_CLK, 
 	output CHNL_TX, 
 	input CHNL_TX_ACK, 
 	output CHNL_TX_LAST, 
@@ -75,30 +74,86 @@ module chnl_tester #(
 	input CHNL_TX_DATA_REN
 );
 
+reg [C_PCI_DATA_WIDTH-1:0] rData={C_PCI_DATA_WIDTH{1'b0}};
+reg [31:0] rLen=0;
+reg [31:0] rCount=0;
+reg [1:0] rState=0;
+
 assign CHNL_RX_CLK = CLK;
+assign CHNL_RX_ACK = (rState == 2'd1);
+assign CHNL_RX_DATA_REN = (rState == 2'd1);
+
 assign CHNL_TX_CLK = CLK;
+assign CHNL_TX = (rState == 2'd3);
+assign CHNL_TX_LAST = 1'd1;
+assign CHNL_TX_LEN = rLen; // in words
+assign CHNL_TX_OFF = 0;
+assign CHNL_TX_DATA = rData;
+assign CHNL_TX_DATA_VALID = (rState == 2'd3);
 
-assign CHNL_TX = CHNL_RX;
-assign CHNL_RX_ACK = CHNL_TX_ACK;
-assign CHNL_TX_LAST = CHNL_RX_LAST;
-assign CHNL_TX_LEN = CHNL_RX_LEN;
-assign CHNL_TX_OFF = CHNL_RX_OFF;
-assign CHNL_TX_DATA = CHNL_RX_DATA;
-assign CHNL_TX_DATA_VALID = CHNL_RX_DATA_VALID;
-assign CHNL_RX_DATA_REN = CHNL_TX_DATA_REN;
+always @(posedge CLK or posedge RST) begin
+	if (RST) begin
+		rLen <= #1 0;
+		rCount <= #1 0;
+		rState <= #1 0;
+		rData <= #1 0;
+	end
+	else begin
+		case (rState)
+		
+		2'd0: begin // Wait for start of RX, save length
+			if (CHNL_RX) begin
+				rLen <= #1 CHNL_RX_LEN;
+				rCount <= #1 0;
+				rState <= #1 2'd1;
+			end
+		end
+		
+		2'd1: begin // Wait for last data in RX, save value
+			if (CHNL_RX_DATA_VALID) begin
+				rData <= #1 CHNL_RX_DATA;
+				rCount <= #1 rCount + (C_PCI_DATA_WIDTH/32);
+			end
+			if (rCount >= rLen)
+				rState <= #1 2'd2;
+		end
 
-chnl_ila ila0_inst(
-    .clk(CLK),
-    .probe0(CHNL_RX),
-    .probe1(CHNL_RX_ACK),
-    .probe2(CHNL_RX_LAST),
-    .probe3(CHNL_RX_LEN),
-    .probe4(CHNL_RX_OFF),
-    .probe5(CHNL_RX_DATA),
-    .probe6(CHNL_RX_DATA_VALID),
-    .probe7(CHNL_RX_DATA_REN),
-    .probe8(0),
-    .probe9(0)
+		2'd2: begin // Prepare for TX
+			rCount <= #1 (C_PCI_DATA_WIDTH/32);
+			rState <= #1 2'd3;
+		end
+
+		2'd3: begin // Start TX with save length and data value
+			if (CHNL_TX_DATA_REN & CHNL_TX_DATA_VALID) begin
+				rData <= #1 {rCount + 4, rCount + 3, rCount + 2, rCount + 1};
+				rCount <= #1 rCount + (C_PCI_DATA_WIDTH/32);
+				if (rCount >= rLen)
+					rState <= #1 2'd0;
+			end
+		end
+		
+		endcase
+	end
+end
+
+/*
+wire [35:0] wControl0;
+chipscope_icon_1 cs_icon(
+	.CONTROL0(wControl0)
 );
+
+chipscope_ila_t8_512 a0(
+	.CLK(CLK), 
+	.CONTROL(wControl0), 
+	.TRIG0({3'd0, (rCount >= 800), CHNL_RX, CHNL_RX_DATA_VALID, rState}),
+	.DATA({442'd0,
+			CHNL_TX_DATA_REN, // 1
+			CHNL_TX_ACK, // 1
+			CHNL_RX_DATA, // 64
+			CHNL_RX_DATA_VALID, // 1
+			CHNL_RX, // 1
+			rState}) // 2
+);
+*/
 
 endmodule

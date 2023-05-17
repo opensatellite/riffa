@@ -38,6 +38,8 @@
 module riffa
     #(parameter C_PCI_DATA_WIDTH = 128,
       parameter C_NUM_CHNL = 12,
+      parameter C_M_AXI_ADDR_WIDTH = 14,
+      parameter C_NUM_USER_INTR = 4,
       parameter C_MAX_READ_REQ_BYTES = 512, // Max size of read requests (in bytes)
       parameter C_TAG_WIDTH = 5, // Number of outstanding requests 
       parameter C_VENDOR = "ALTERA",
@@ -169,9 +171,34 @@ module riffa
      input [(C_NUM_CHNL*31)-1:0]                CHNL_TX_OFF, 
      input [(C_NUM_CHNL*C_PCI_DATA_WIDTH)-1:0]  CHNL_TX_DATA, 
      input [C_NUM_CHNL-1:0]                     CHNL_TX_DATA_VALID, 
-     output [C_NUM_CHNL-1:0]                    CHNL_TX_DATA_REN
-
-     );
+     output [C_NUM_CHNL-1:0]                    CHNL_TX_DATA_REN,
+     
+     input [C_NUM_USER_INTR-1:0]                USER_INTR,
+     
+     // Interface: BAR2 Channel - AXI4Lite
+     output aclk,
+     output aresetn,
+     output [C_M_AXI_ADDR_WIDTH-1:0] m_axi_awaddr,
+     output [2:0] m_axi_awprot,
+     output m_axi_awvalid,
+     input  m_axi_awready,
+     output [31:0] m_axi_wdata,
+     output [3:0] m_axi_wstrb,
+     output m_axi_wvalid,
+     input  m_axi_wready,
+     input  [1:0] m_axi_bresp,
+     input  m_axi_bvalid,
+     output m_axi_bready,
+     output [C_M_AXI_ADDR_WIDTH-1:0] m_axi_araddr,
+     output [2:0] m_axi_arprot,
+     output m_axi_arvalid,
+     input  m_axi_arready,
+     input  [31:0] m_axi_rdata,
+     input  [1:0] m_axi_rresp,
+     input  m_axi_rvalid,
+     output m_axi_rready
+    );
+   
     localparam C_MAX_READ_REQ = clog2s(C_MAX_READ_REQ_BYTES)-7;    // Max read: 000=128B; 001=256B; 010=512B; 011=1024B; 100=2048B; 101=4096B
     localparam C_NUM_CHNL_WIDTH = clog2s(C_NUM_CHNL);
     localparam C_PCI_DATA_WORD_WIDTH = clog2s((C_PCI_DATA_WIDTH/32)+1);
@@ -280,6 +307,7 @@ module riffa
 
     reg [4:0]                                     rWideRst;
     reg                                           rRst;
+    wire                                          wPendingRst;
 
     genvar                                        i;
 
@@ -475,6 +503,7 @@ module riffa
           // Parameters
           .C_PCI_DATA_WIDTH             (C_PCI_DATA_WIDTH),
           .C_NUM_CHNL                   (C_NUM_CHNL),
+          .C_M_AXI_ADDR_WIDTH           (C_M_AXI_ADDR_WIDTH),
           .C_MAX_READ_REQ_BYTES         (C_MAX_READ_REQ_BYTES),
           .C_VENDOR                     (C_VENDOR),
           .C_NUM_VECTORS                (C_NUM_VECTORS),
@@ -500,6 +529,28 @@ module riffa
          .CHNL_TX_DONE_READY            (wChnlTxDoneReady),
          .CHNL_RX_DONE_READY            (wChnlRxDoneReady),
          .CHNL_NAME_READY               (wChnlNameReady), // TODO: Could do this on a per-channel basis
+         // AXI4Lite Master
+         .aclk(aclk),
+         .aresetn(aresetn),
+         .m_axi_awaddr(m_axi_awaddr),
+         .m_axi_awprot(m_axi_awprot),
+         .m_axi_awvalid(m_axi_awvalid),
+         .m_axi_awready(m_axi_awready),
+         .m_axi_wdata(m_axi_wdata),
+         .m_axi_wstrb(m_axi_wstrb),
+         .m_axi_wvalid(m_axi_wvalid),
+         .m_axi_wready(m_axi_wready),
+         .m_axi_bresp(m_axi_bresp),
+         .m_axi_bvalid(m_axi_bvalid),
+         .m_axi_bready(m_axi_bready),
+         .m_axi_araddr(m_axi_araddr),
+         .m_axi_arprot(m_axi_arprot),
+         .m_axi_arvalid(m_axi_arvalid),
+         .m_axi_arready(m_axi_arready),
+         .m_axi_rdata(m_axi_rdata),
+         .m_axi_rresp(m_axi_rresp),
+         .m_axi_rvalid(m_axi_rvalid),
+         .m_axi_rready(m_axi_rready),
          // TXC Engine Interface
          .TXC_DATA_VALID                (_wTxcDataValid),
          .TXC_DATA                      (_wTxcData[C_PCI_DATA_WIDTH-1:0]),
@@ -567,7 +618,8 @@ module riffa
          .CONFIG_CPL_BOUNDARY_SEL       (CONFIG_CPL_BOUNDARY_SEL));
     // Connect the interrupt vector and controller.
     interrupt 
-        #(.C_NUM_CHNL                   (C_NUM_CHNL)) 
+        #(.C_NUM_CHNL                   (C_NUM_CHNL),
+          .C_NUM_USER_INTR              (C_NUM_USER_INTR)) 
     intr 
         (// Inputs
          .RST                           (RST_OUT),
@@ -576,6 +628,7 @@ module riffa
          .TX_TXN                        (wChnlTxRequest),
          .TX_SG_BUF_RECVD               (wChnlSgTxBufRecvd),
          .TX_TXN_DONE                   (wChnlTxDone),
+         .USER_INTR                     (USER_INTR),
          .VECT_0_RST                    (wIntrVectorReady[0]),
          .VECT_1_RST                    (wIntrVectorReady[1]),
          .VECT_RST                      (_wTxcData[31:0]),

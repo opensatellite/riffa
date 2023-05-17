@@ -32,31 +32,11 @@
 // USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
 // DAMAGE.
 // ----------------------------------------------------------------------
-// ----------------------------------------------------------------------
-// Filename:            Filename: types.vh
-// Version:             Version: 1.0
-// Verilog Standard:    Verilog-2005
-// Description: This header file contains several convenient types that
-// are used in the engine interface.
-// Author: Dustin Richmond (@darichmond) 
-// ----------------------------------------------------------------------
-`ifndef __TYPES_VH
-`define __TYPES_VH 1
+#include <sys/time.h>
 
-`define TRLS_REQ_RD `EXT_TYPE_W'b000 
-`define TRLS_REQ_WR `EXT_TYPE_W'b001 
-`define TRLS_CPL_ND `EXT_TYPE_W'b010
-`define TRLS_CPL_WD `EXT_TYPE_W'b011
-`define TRLS_MSG_ND `EXT_TYPE_W'b100
-`define TRLS_MSG_WD `EXT_TYPE_W'b101
+#define GET_TIME_INIT(num) struct timeval _timers[num]
 
-`define TRLS_TYPE_PAY_I 0 // Payload Bit Index. If 1, packet has a payload, else 0
-`define TRLS_TYPE_CPL_I 1 // Completion Bit Index. If 1, packet is a Completion
-`define TRLS_TYPE_MSG_I 2 // Message Bit Index. If 1, packet is a message
+#define GET_TIME_VAL(num) gettimeofday(&_timers[num], NULL)
 
-`define TRLS_BAR0_BIT    0
-`define TRLS_BAR2_BIT    2
-`define TRLS_BAR4_BIT    4
-`define TRLS_BARROM_BIT  7
+#define TIME_VAL_TO_MS(num) (((double)_timers[num].tv_sec*1000.0) + ((double)_timers[num].tv_usec/1000.0))
 
-`endif

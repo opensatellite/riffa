@@ -86,6 +86,7 @@ module rxr_engine_128
 
      // Interface: RX Shift Register
      input [(C_RX_PIPELINE_DEPTH+1)*C_PCI_DATA_WIDTH-1:0] RX_SR_DATA,
+     input [(C_RX_PIPELINE_DEPTH+1)*`SIG_BARDECODE_W-1:0] RX_SR_BARDECODE,
      input [C_RX_PIPELINE_DEPTH:0]                        RX_SR_EOP,
      input [(C_RX_PIPELINE_DEPTH+1)*`SIG_OFFSET_W-1:0]    RX_SR_END_OFFSET,
      input [(C_RX_PIPELINE_DEPTH+1)*`SIG_OFFSET_W-1:0]    RX_SR_START_OFFSET,
@@ -122,6 +123,7 @@ module rxr_engine_128
     wire                                                  __wRxrHdrSOP; // Asserted on non-straddle SOP
     wire                                                  __wRxrHdrSOPStraddle;
     wire                                                  __wRxrHdr4DWHWDataSF;
+    wire [`SIG_BARDECODE_W-1:0]                           __wRxrMetaBarDecoded;
 
     // Header Reg Outputs
     wire                                                  _wRxrHdrValid;
@@ -152,6 +154,7 @@ module rxr_engine_128
     wire [1:0]                                            _wRxrHdrDataEoff;
     wire [3:0]                                            _wRxrHdrStartMask;
     wire [3:0]                                            _wRxrHdrEndMask;
+    wire [`SIG_BARDECODE_W-1:0]                           _wRxrMetaBarDecoded;
     
     // Header Reg Outputs
     wire                                                  wRxrHdrSF;
@@ -206,7 +209,7 @@ module rxr_engine_128
     assign __wRxrStraddledStartOffset = RX_SR_START_OFFSET[`SIG_OFFSET_W*(C_RX_INPUT_STAGES) +: `SIG_OFFSET_W];
     assign __wRxrHdrValid = __wRxrHdrSOP | ((rStraddledSOP | rStraddledSOPSplit) & RX_SR_VALID[C_RX_INPUT_STAGES]);
     assign __wRxrHdr4DWHWDataSF = (_wRxrHdr[`TLP_4DWHBIT_I] & _wRxrHdr[`TLP_PAYBIT_I] & RX_SR_VALID[C_RX_INPUT_STAGES] & _wRxrHdrDelayedSOP);
-    
+    assign __wRxrMetaBarDecoded = RX_SR_BARDECODE[`SIG_BARDECODE_W*(C_RX_INPUT_STAGES) +: `SIG_BARDECODE_W];
 
     assign _wRxrHdrHdrLen = {_wRxrHdr[`TLP_4DWHBIT_I],~_wRxrHdr[`TLP_4DWHBIT_I],~_wRxrHdr[`TLP_4DWHBIT_I]};
     assign _wRxrHdrDataSoff = {1'b0,_wRxrHdrSOPStraddle,1'b0} + _wRxrHdrHdrLen;
@@ -300,6 +303,21 @@ module rxr_engine_128
          // Inputs
          .CLK                           (CLK));
 
+    register
+      #(// Parameters
+        .C_WIDTH                        (`SIG_BARDECODE_W),
+        .C_VALUE                        (0)
+        /*AUTOINSTPARAM*/)
+    bar_decode_reg
+      (// Outputs
+       .RD_DATA                         (_wRxrMetaBarDecoded),
+       // Inputs
+       .RST_IN                          (0),// Never need to reset
+       .WR_DATA                         (__wRxrMetaBarDecoded),
+       .WR_EN                           (__wRxrHdrSOP),
+       /*AUTOINST*/
+       // Inputs
+       .CLK                             (CLK));
 
     register
         #(
@@ -379,24 +397,26 @@ module rxr_engine_128
 
     register
         #(// Parameters
-          .C_WIDTH              (3+8),
+          .C_WIDTH              (3+8+`SIG_BARDECODE_W),
           .C_VALUE              (0)
           /*AUTOINSTPARAM*/)
     metadata_valid
         (// Output
          .RD_DATA               ({wRxrHdrValid, 
                                   wRxrHdrSCP, wRxrHdrMCP,
-                                  wRxrHdrEndMask, wRxrHdrStartMask}),
+                                  wRxrHdrEndMask, wRxrHdrStartMask,
+                                  wRxrMetaBarDecoded}),
          // Inputs
          .RST_IN                (0),
          .WR_DATA               ({_wRxrHdrValid, 
                                   _wRxrHdrSCP, _wRxrHdrMCP,
-                                  _wRxrHdrEndMask, _wRxrHdrStartMask}),
+                                  _wRxrHdrEndMask, _wRxrHdrStartMask,
+                                  _wRxrMetaBarDecoded}),
          .WR_EN                 (1),
          /*AUTOINST*/
          // Inputs
          .CLK                           (CLK));
-
+       
     register
         #(// Parameters
           .C_WIDTH              (`SIG_ADDR_W/2),
@@ -428,7 +448,7 @@ module rxr_engine_128
          /*AUTOINST*/
          // Inputs
          .CLK                           (CLK));
-
+         
     offset_to_mask
         #(// Parameters
           .C_MASK_SWAP                  (0),

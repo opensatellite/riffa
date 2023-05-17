@@ -88,6 +88,7 @@ module rxr_engine_classic
 
      // Interface: RX Shift Register
      input [(C_RX_PIPELINE_DEPTH+1)*C_PCI_DATA_WIDTH-1:0] RX_SR_DATA,
+     input [(C_RX_PIPELINE_DEPTH+1)*`SIG_BARDECODE_W-1:0] RX_SR_BARDECODE,
      input [C_RX_PIPELINE_DEPTH:0]                        RX_SR_EOP,
      input [(C_RX_PIPELINE_DEPTH+1)*`SIG_OFFSET_W-1:0]    RX_SR_END_OFFSET,
      input [C_RX_PIPELINE_DEPTH:0]                        RX_SR_SOP,
@@ -131,6 +132,7 @@ module rxr_engine_classic
 
     wire [63:0]                                           wAddrFmt;
     wire [63:0]                                           wMetadata;
+    wire [`SIG_BARDECODE_W-1:0]                           wMetaBarDecode;
     wire [`TLP_TYPE_W-1:0]                                wType;
     wire [`TLP_LEN_W-1:0]                                 wLength;
     wire                                                  wAddrDW0Bit2;
@@ -166,6 +168,7 @@ module rxr_engine_classic
     wire [(C_PCI_DATA_WIDTH/32)-1:0]                      wRxrDataWordEnable;
     wire                                                  wRxrDataStartFlag;
     wire [C_OFFSET_WIDTH-1:0]                             wRxrDataStartOffset;
+    wire [`SIG_BARDECODE_W-1:0]                           wRxrMetaBarDecode;
 
     wire [C_RX_PIPELINE_DEPTH:0]                          wRxSrSop;
 
@@ -202,7 +205,7 @@ module rxr_engine_classic
     assign RXR_DATA_START_FLAG = wRxrDataStartFlag;
     assign RXR_DATA_START_OFFSET = wRxrDataStartOffset;
 
-    assign RXR_META_BAR_DECODED = 0;
+    assign RXR_META_BAR_DECODED = wRxrMetaBarDecode;
     assign RXR_META_LENGTH = wRxrMetadata[`TLP_LEN_R];
     assign RXR_META_TC = wRxrMetadata[`TLP_TC_R];
     assign RXR_META_ATTR = {wRxrMetadata[`TLP_ATTR1_R], wRxrMetadata[`TLP_ATTR0_R]};
@@ -363,6 +366,22 @@ module rxr_engine_classic
          /*AUTOINST*/
          // Inputs
          .CLK                           (CLK));
+         
+    register
+        #(// Parameters
+              .C_WIDTH                      (`SIG_BARDECODE_W),
+              .C_VALUE                      (0)
+              /*AUTOINSTPARAM*/)
+    rx_bar_decode_register              //latch BARDECODE and METADW0 at same cycle
+        (// Outputs
+         .RD_DATA                       (wMetaBarDecode),
+         // Inputs
+         .WR_DATA                       (RX_SR_BARDECODE[`SIG_BARDECODE_W*C_RX_INPUT_STAGES +: `SIG_BARDECODE_W]),
+         .WR_EN                         (wRxSrSop[C_RX_METADW0_CYCLE]),
+         .RST_IN                        (rRST),
+         /*AUTOINST*/
+         // Inputs
+         .CLK                           (CLK));
 
     register
         #(// Parameters
@@ -496,16 +515,16 @@ module rxr_engine_classic
     pipeline
         #(// Parameters
           .C_DEPTH                      (C_RX_OUTPUT_STAGES),
-          .C_WIDTH                      (`TLP_MAXHDR_W + 2*(1 + C_OFFSET_WIDTH)),
+          .C_WIDTH                      (`TLP_MAXHDR_W + `SIG_BARDECODE_W + 2*(1 + C_OFFSET_WIDTH)),
           .C_USE_MEMORY                 (0)
           /*AUTOINSTPARAM*/)
     output_pipeline
         (// Outputs
          .WR_DATA_READY                 (), // Pinned to 1
-         .RD_DATA                       ({wRxrMetadata,wRxrMetaAddr,wRxrDataStartFlag,wRxrDataStartOffset,wRxrDataEndFlag,wRxrDataEndOffset}),
+         .RD_DATA                       ({wRxrMetadata,wRxrMetaAddr,wRxrMetaBarDecode,wRxrDataStartFlag,wRxrDataStartOffset,wRxrDataEndFlag,wRxrDataEndOffset}),
          .RD_DATA_VALID                 (wRxrDataValid),
          // Inputs
-         .WR_DATA                       ({wMetadata, wAddrFmt, wStartFlag,wStartOffset[C_OFFSET_WIDTH-1:0],wEndFlag,wEndOffset[C_OFFSET_WIDTH-1:0]}),
+         .WR_DATA                       ({wMetadata, wAddrFmt, wMetaBarDecode, wStartFlag,wStartOffset[C_OFFSET_WIDTH-1:0],wEndFlag,wEndOffset[C_OFFSET_WIDTH-1:0]}),
          .WR_DATA_VALID                 (rValid & RX_SR_VALID[C_TOTAL_STAGES-C_RX_OUTPUT_STAGES]),
          .RD_DATA_READY                 (1'b1),
          .RST_IN                        (rRST),

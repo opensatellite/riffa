@@ -41,12 +41,16 @@
  * Author: Matthew Jacobsen
  * History: @mattj: Initial release. Version 2.0.
  */
+#include  <linux/types.h>
+#include <linux/atomic.h>
 
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/version.h>
 #include <linux/device.h>
+#include <linux/cdev.h>
+#include <linux/poll.h>
 #include <linux/err.h>
 #include <linux/fs.h>
 #include <linux/pci.h>
@@ -104,6 +108,11 @@ struct chnl_dir {
 	struct sg_mapping * sg_map_1;
 };
 
+struct user_irq {
+	wait_queue_head_t waitq;
+	atomic_t count;
+};
+
 struct fpga_state {
 	struct pci_dev * dev;
 	unsigned long long irq;
@@ -111,6 +120,10 @@ struct fpga_state {
 	unsigned long long bar0_addr;
 	unsigned long long bar0_len;
 	unsigned long long bar0_flags;  
+	void __iomem *bar2;
+	unsigned long long bar2_addr;
+	unsigned long long bar2_len;
+	unsigned long long bar2_flags;  
 	atomic_t intr_disabled;
 	void * spill_buf_addr;
 	dma_addr_t spill_buf_hw_addr;
@@ -123,11 +136,16 @@ struct fpga_state {
 	int num_chnls;
 	struct chnl_dir ** recv;
 	struct chnl_dir ** send;
+#if USER_IRQS > 0
+	struct user_irq *user_irqs;
+#endif
 };
 
 // Global variables (to this file only)
+static dev_t mymodule_devt = 0;
 static struct class * mymodule_class;
-static dev_t devt;
+static struct cdev mymodule_cdev;
+static struct cdev mymodule_irq_cdevs;
 static atomic_t used_fpgas[NUM_FPGAS];
 static struct fpga_state * fpgas[NUM_FPGAS];
 
@@ -149,6 +167,16 @@ static inline unsigned int read_reg(struct fpga_state * sc, int offset)
 static inline void write_reg(struct fpga_state * sc, int offset, unsigned int val)
 {
 	writel(val, sc->bar0 + (offset<<2));
+}
+
+static inline unsigned int read_axi_reg(struct fpga_state * sc, unsigned int offset)
+{
+	return readl(sc->bar2 + offset);
+}
+
+static inline void write_axi_reg(struct fpga_state * sc, unsigned int offset, unsigned int val)
+{
+	writel(val, sc->bar2 + offset);
 }
 
 #ifdef BUILD_32
@@ -253,8 +281,116 @@ int pcie_capability_write_dword(struct pci_dev *dev, int pos, u32 val)
 	#define pci_set_dma_mask(d, m)            dma_set_mask(&(d)->dev, m)
 	#define pci_set_consistent_dma_mask(d, m) dma_set_coherent_mask(&(d)->dev, m)
 #endif
+///////////////////////////////////////////////////////
+// INTERRUPT EVENT FILES/////////////////////////////////////////////////
+#if USER_IRQS > 0
+int irq_open(struct inode *inode, struct file *file)
+{
+	int idx;
+	int fpga_idx;
+	unsigned int irq_idx;
+
+	if(iminor(inode) == 0 || iminor(inode) >= (NUM_FPGAS * USER_IRQS + 1)) {
+		printk(KERN_ERR "riffa: invalid minor %d for irq device\n", iminor(inode));
+		return -EINVAL;
+	}
+
+	idx = iminor(inode) - 1;
+	fpga_idx = idx / USER_IRQS;
+	irq_idx = idx % USER_IRQS;
+
+	if (!atomic_read(&used_fpgas[fpga_idx])) {
+		printk(KERN_WARNING "riffa: fpga not present, irq invalid\n");
+		return -ENOENT;
+	}
+
+	file->private_data = &(fpgas[fpga_idx]->user_irqs[irq_idx]);
+
+	return 0;
+}
+
+/*
+ * Called when the device goes from used to unused.
+ */
+int irq_close(struct inode *inode, struct file *file)
+{
+	if(file->private_data == NULL) {
+		printk(KERN_ERR "riffa: invalid user_irq in file %s\n", file->f_path.dentry->d_iname);
+	}
+
+	return 0;
+}
 
 
+/*
+ * character device file operations for irqs
+ */
+static ssize_t irq_read(struct file *file, char __user *buf,
+		size_t count, loff_t *pos)
+{
+	int rv;
+	struct user_irq *uirq = (struct user_irq*)file->private_data;
+	int uirq_count_get = 0;
+
+	if(!uirq) {
+		printk(KERN_ERR "file %s user_irq NULL\n", file->f_path.dentry->d_iname);
+		return -EINVAL;
+	}
+
+	if (count != 4)
+		return -EPROTO;
+
+	if (*pos & 3)
+		return -EPROTO;
+
+	if((file->f_flags & O_NONBLOCK) == 0) {
+		//only wait with blocking mode
+		// sleep until any interrupt events have occurred, or a signal arrived
+		rv = wait_event_interruptible(uirq->waitq, atomic_read(&uirq->count) != 0);
+		if (rv) printk(KERN_WARNING "wait_event_interruptible=%d\n", rv);
+
+		/* wait_event_interruptible() was interrupted by a signal */
+		if (rv == -ERESTARTSYS)
+			return -ERESTARTSYS;
+	}
+
+	uirq_count_get = atomic_xchg(&uirq->count, uirq_count_get);
+	rv = copy_to_user(buf, &uirq_count_get, 4);
+	if (rv) printk(KERN_WARNING "Copy to user failed but continuing\n");
+
+	return 4;
+}
+
+static unsigned int irq_poll(struct file *file, poll_table *wait)
+{
+	struct user_irq *uirq = (struct user_irq*)file->private_data;
+	unsigned int mask = 0;
+
+	if(!uirq) {
+		printk(KERN_ERR "file %s user_irq NULL\n", file->f_path.dentry->d_iname);
+		return -EINVAL;
+	}
+
+	poll_wait(file, &uirq->waitq,  wait);
+	if(atomic_read(&uirq->count) > 0) {
+		mask = POLLIN | POLLRDNORM;	/* readable */
+	}
+	
+	return mask;
+}
+
+/*
+ * character device file operations for the irq events
+ */
+static const struct file_operations irq_fops = {
+	.owner = THIS_MODULE,
+	.open = irq_open,
+	.release = irq_close,
+	.read = irq_read,
+	.poll = irq_poll,
+};
+
+#endif //if USER_IRQS > 0
 
 ///////////////////////////////////////////////////////
 // INTERRUPT HANDLER
@@ -279,7 +415,10 @@ static inline void process_intr_vector(struct fpga_state * sc, int off,
 	// [27] TX_TXN_DONE		for channel 5 in VECT_0, channel 11 in VECT_1
 	// [28] RX_SG_BUF_RECVD	for channel 5 in VECT_0, channel 11 in VECT_1
 	// [29] RX_TXN_DONE		for channel 5 in VECT_0, channel 11 in VECT_1
-	// Positions 30 - 31 in both VECT_0 and VECT_1 are zero.
+	// VECT_0[30]  for user interrupt 0
+	// VECT_0[31]  for user interrupt 1
+	// VECT_1[30]  for user interrupt 2
+	// VECT_1[31]  for user interrupt 3
 
 	unsigned int offlast;
 	unsigned int len;
@@ -287,13 +426,32 @@ static inline void process_intr_vector(struct fpga_state * sc, int off,
 	int send;
 	int chnl;
 	int i;
+	int irq;
 
-//printk(KERN_INFO "riffa: intrpt_handler received:%08x\n", vect);
-	if (vect & 0xC0000000) {
-		printk(KERN_ERR "riffa: fpga:%d, received bad interrupt vector:%08x\n", sc->id, vect);
-		return;
+//----user irq processing
+	//DEBUG_MSG(KERN_INFO "riffa: intr=%08x\n", vect);
+	//if (vect & 0xC0000000) {
+		//printk(KERN_ERR "riffa: fpga:%d, received bad interrupt vector:%08x\n", sc->id, vect);
+		//return;
+	//}
+	if(vect & (1<<31)) {
+		if(off) irq = 3;	//vect1[31]
+		else irq = 1;		//vect0[31]
+		if(irq < USER_IRQS) {
+			atomic_inc(&sc->user_irqs[irq].count);
+			wake_up(&sc->user_irqs[irq].waitq);
+		}
+	}
+	if(vect & (1 << 30)) {
+		if(off) irq = 2;	//vect1[30]
+		else irq = 0;		//vect0[30]
+		if(irq < USER_IRQS) {
+			atomic_inc(&sc->user_irqs[irq].count);
+			wake_up(&sc->user_irqs[irq].waitq);
+		}
 	}
 
+	//chnl irq
 	for (i = 0; i < 6 && (i+off) < sc->num_chnls; ++i) {
 		chnl = i + off;
 		recv = 0; 
@@ -377,6 +535,11 @@ static irqreturn_t intrpt_handler(int irq, void *dev_id)
 	unsigned int vect0;
 	unsigned int vect1;
 	struct fpga_state * sc;
+#if USER_IRQS > 2
+	static const unsigned int uirq23used = 1;
+#else 
+	static const unsigned int uirq23used = 0;
+#endif
 
 	sc = (struct fpga_state *)dev_id;
 	vect0 = 0;
@@ -390,12 +553,12 @@ static irqreturn_t intrpt_handler(int irq, void *dev_id)
 	if (!atomic_read(&sc->intr_disabled)) {
 		// Read the interrupt vector(s):
 		vect0 = read_reg(sc, IRQ_REG0_OFF);
-		if (sc->num_chnls > 6)
+		if (sc->num_chnls > 6 || uirq23used)
 			vect1 = read_reg(sc, IRQ_REG1_OFF);
 
 		// Process the vector(s)
 		process_intr_vector(sc, 0, vect0);
-		if (sc->num_chnls > 6)
+		if (sc->num_chnls > 6 || uirq23used)
 			process_intr_vector(sc, 6, vect1);
 	}
 
@@ -466,7 +629,7 @@ static inline struct sg_mapping * fill_sg_buf(struct fpga_state * sc, int chnl,
 		#else
 		num_pages = get_user_pages(udata, num_pages_reqd, FOLL_WRITE, pages, NULL);
 		#endif
-
+		
 		#if LINUX_VERSION_CODE < KERNEL_VERSION(5,8,0)
 		up_read(&current->mm->mmap_sem);
 		#else
@@ -1009,6 +1172,13 @@ static inline void reset(int id)
 			clear_bit(CHNL_FLAG_BUSY, &sc->send[i]->flags);
 			clear_bit(CHNL_FLAG_BUSY, &sc->recv[i]->flags);
 		}
+
+		//Reset user irqs
+		for(i = 0; i < USER_IRQS; i++) {
+			wake_up(&sc->user_irqs[i].waitq);
+			atomic_set(&sc->user_irqs[i].count, 0);
+		}
+
 		// Enable interrupts
 		atomic_set(&sc->intr_disabled, 0);
 	}
@@ -1023,6 +1193,7 @@ static long fpga_ioctl(struct file *filp, unsigned int ioctlnum,
 {	
 	int rc;
 	fpga_chnl_io io;
+	fpga_axi_io axi;
 	fpga_info_list list;
 
 	switch (ioctlnum) {
@@ -1032,7 +1203,7 @@ static long fpga_ioctl(struct file *filp, unsigned int ioctlnum,
 			return rc;
 		}
 		if (io.id < 0 || io.id >= NUM_FPGAS || !atomic_read(&used_fpgas[io.id]))
-			return 0;
+			return -ENOENT;
 		return chnl_send_wrapcheck(fpgas[io.id], io.chnl, io.data, io.len, io.offset,
 				io.last, io.timeout);
 	case IOCTL_RECV:
@@ -1041,7 +1212,7 @@ static long fpga_ioctl(struct file *filp, unsigned int ioctlnum,
 			return rc;
 		}
 		if (io.id < 0 || io.id >= NUM_FPGAS || !atomic_read(&used_fpgas[io.id]))
-			return 0;
+			return -ENOENT;
 		return chnl_recv_wrapcheck(fpgas[io.id], io.chnl, io.data, io.len, io.timeout);
 	case IOCTL_LIST:
 		list_fpgas(&list);
@@ -1050,6 +1221,32 @@ static long fpga_ioctl(struct file *filp, unsigned int ioctlnum,
 		return rc;
 	case IOCTL_RESET:
 		reset((int)ioctlparam);
+		break;
+	case IOCTL_AXI_WRITE:
+		if ((rc = copy_from_user(&axi, (void *)ioctlparam, sizeof(fpga_axi_io)))) {
+			printk(KERN_ERR "riffa: cannot read ioctl user parameter.\n");
+			return rc;
+		}
+		if (axi.id < 0 || axi.id >= NUM_FPGAS || !atomic_read(&used_fpgas[axi.id]))
+			return -ENOENT;
+		if (axi.offset & 3) 
+			return -EIO;
+		write_axi_reg(fpgas[axi.id], axi.offset, axi.val);
+		break;
+	case IOCTL_AXI_READ:
+		if ((rc = copy_from_user(&axi, (void *)ioctlparam, sizeof(fpga_axi_io)))) {
+			printk(KERN_ERR "riffa: cannot read ioctl user parameter.\n");
+			return rc;
+		}
+		if (axi.id < 0 || axi.id >= NUM_FPGAS || !atomic_read(&used_fpgas[axi.id]))
+			return -ENOENT;
+		if (axi.offset & 3) 
+			return -EIO;
+		axi.val = read_axi_reg(fpgas[axi.id], axi.offset);
+		if ((rc = copy_to_user((void *)ioctlparam, &axi, sizeof(fpga_axi_io)))) {
+			printk(KERN_ERR "riffa: cannot write ioctl user parameter.\n");
+			return rc;
+		}
 		break;
 	default:
 		return -ENOTTY;
@@ -1208,10 +1405,27 @@ static int __devinit fpga_probe(struct pci_dev *dev, const struct pci_device_id 
 		return (-ENODEV);
 	}
 
+	// PCI BAR 2
+	sc->bar2_addr = pci_resource_start(dev, 2);
+	sc->bar2_len = pci_resource_len(dev, 2);
+	sc->bar2_flags = pci_resource_flags(dev, 2);
+	printk(KERN_INFO "riffa: BAR 2 address: %llx\n", sc->bar2_addr);
+	printk(KERN_INFO "riffa: BAR 2 length: %lld bytes\n", sc->bar2_len);
+	sc->bar2 = ioremap(sc->bar2_addr, sc->bar2_len);
+	if (!sc->bar2) {
+		printk(KERN_ERR "riffa: could not ioremap BAR 2\n");
+		iounmap(sc->bar0);
+		pci_release_regions(dev);
+		pci_disable_device(dev);
+		kfree(sc);
+		return (-ENODEV);
+	}
+
 	// Setup MSI interrupts 
 	error = pci_enable_msi(dev);
 	if (error != 0) {
 		printk(KERN_ERR "riffa: pci_enable_msi returned error: %d\n", error);
+		iounmap(sc->bar2);
 		iounmap(sc->bar0);
 		pci_release_regions(dev);
 		pci_disable_device(dev);
@@ -1224,6 +1438,7 @@ static int __devinit fpga_probe(struct pci_dev *dev, const struct pci_device_id 
 	if (error != 0) {
 		printk(KERN_ERR "riffa: request_irq(%d) returned error: %d\n", dev->irq, error);
 		pci_disable_msi(dev);
+		iounmap(sc->bar2);
 		iounmap(sc->bar0);
 		pci_release_regions(dev);
 		pci_disable_device(dev);
@@ -1239,6 +1454,7 @@ static int __devinit fpga_probe(struct pci_dev *dev, const struct pci_device_id 
 		printk(KERN_ERR "riffa: pcie_capability_read_dword returned error: %d\n", error);
 		free_irq(dev->irq, sc);
 		pci_disable_msi(dev);
+		iounmap(sc->bar2);
 		iounmap(sc->bar0);
 		pci_release_regions(dev);
 		pci_disable_device(dev);
@@ -1252,6 +1468,7 @@ static int __devinit fpga_probe(struct pci_dev *dev, const struct pci_device_id 
 		printk(KERN_ERR "riffa: pcie_capability_write_dword returned error: %d\n", error);
 		free_irq(dev->irq, sc);
 		pci_disable_msi(dev);
+		iounmap(sc->bar2);
 		iounmap(sc->bar0);
 		pci_release_regions(dev);
 		pci_disable_device(dev);
@@ -1266,6 +1483,7 @@ static int __devinit fpga_probe(struct pci_dev *dev, const struct pci_device_id 
 		pcie_capability_write_dword(dev,PCI_EXP_DEVCTL,devctl_result);
 		free_irq(dev->irq, sc);
 		pci_disable_msi(dev);
+		iounmap(sc->bar2);
 		iounmap(sc->bar0);
 		pci_release_regions(dev);
 		pci_disable_device(dev);
@@ -1280,6 +1498,7 @@ static int __devinit fpga_probe(struct pci_dev *dev, const struct pci_device_id 
 		pcie_capability_write_dword(dev,PCI_EXP_DEVCTL,devctl_result);
 		free_irq(dev->irq, sc);
 		pci_disable_msi(dev);
+		iounmap(sc->bar2);
 		iounmap(sc->bar0);
 		pci_release_regions(dev);
 		pci_disable_device(dev);
@@ -1295,6 +1514,7 @@ static int __devinit fpga_probe(struct pci_dev *dev, const struct pci_device_id 
 		pcie_capability_write_dword(dev,PCI_EXP_DEVCTL,devctl_result);
 		free_irq(dev->irq, sc);
 		pci_disable_msi(dev);
+		iounmap(sc->bar2);
 		iounmap(sc->bar0);
 		pci_release_regions(dev);
 		pci_disable_device(dev);
@@ -1310,6 +1530,7 @@ static int __devinit fpga_probe(struct pci_dev *dev, const struct pci_device_id 
 		pcie_capability_write_dword(dev,PCI_EXP_DEVCTL,devctl_result);
 		free_irq(dev->irq, sc);
 		pci_disable_msi(dev);
+		iounmap(sc->bar2);
 		iounmap(sc->bar0);
 		pci_release_regions(dev);
 		pci_disable_device(dev);
@@ -1336,6 +1557,7 @@ static int __devinit fpga_probe(struct pci_dev *dev, const struct pci_device_id 
 		pcie_capability_write_dword(dev,PCI_EXP_DEVCTL,devctl_result);
 		free_irq(dev->irq, sc);
 		pci_disable_msi(dev);
+		iounmap(sc->bar2);
 		iounmap(sc->bar0);
 		pci_release_regions(dev);
 		pci_disable_device(dev);
@@ -1350,6 +1572,7 @@ static int __devinit fpga_probe(struct pci_dev *dev, const struct pci_device_id 
 		pcie_capability_write_dword(dev,PCI_EXP_DEVCTL,devctl_result);
 		free_irq(dev->irq, sc);
 		pci_disable_msi(dev);
+		iounmap(sc->bar2);
 		iounmap(sc->bar0);
 		pci_release_regions(dev);
 		pci_disable_device(dev);
@@ -1364,6 +1587,7 @@ static int __devinit fpga_probe(struct pci_dev *dev, const struct pci_device_id 
 		pcie_capability_write_dword(dev,PCI_EXP_DEVCTL,devctl_result);
 		free_irq(dev->irq, sc);
 		pci_disable_msi(dev);
+		iounmap(sc->bar2);
 		iounmap(sc->bar0);
 		pci_release_regions(dev);
 		pci_disable_device(dev);
@@ -1378,11 +1602,19 @@ static int __devinit fpga_probe(struct pci_dev *dev, const struct pci_device_id 
 		pcie_capability_write_dword(dev,PCI_EXP_DEVCTL,devctl_result);
 		free_irq(dev->irq, sc);
 		pci_disable_msi(dev);
+		iounmap(sc->bar2);
 		iounmap(sc->bar0);
 		pci_release_regions(dev);
 		pci_disable_device(dev);
 		kfree(sc);
 		return (-ENODEV);
+	}
+
+	// Create user irq
+	sc->user_irqs = (struct user_irq*) kzalloc(sizeof(struct user_irq) * USER_IRQS, GFP_KERNEL);
+	for(i = 0; i < USER_IRQS; i++) {
+		init_waitqueue_head(&sc->user_irqs[i].waitq);
+		atomic_set(&sc->user_irqs[i].count, 0);
 	}
 
 	// Create chnl_dir structs.
@@ -1399,6 +1631,7 @@ static int __devinit fpga_probe(struct pci_dev *dev, const struct pci_device_id 
 		pcie_capability_write_dword(dev,PCI_EXP_DEVCTL,devctl_result);
 		free_irq(dev->irq, sc);
 		pci_disable_msi(dev);
+		iounmap(sc->bar2);
 		iounmap(sc->bar0);
 		pci_release_regions(dev);
 		pci_disable_device(dev);
@@ -1426,6 +1659,7 @@ static int __devinit fpga_probe(struct pci_dev *dev, const struct pci_device_id 
 		pcie_capability_write_dword(dev,PCI_EXP_DEVCTL,devctl_result);
 		free_irq(dev->irq, sc);
 		pci_disable_msi(dev);
+		iounmap(sc->bar2);
 		iounmap(sc->bar0);
 		pci_release_regions(dev);
 		pci_disable_device(dev);
@@ -1438,6 +1672,7 @@ static int __devinit fpga_probe(struct pci_dev *dev, const struct pci_device_id 
 	sc->spill_buf_hw_addr = hw_addr;
 	if (sc->spill_buf_addr == NULL) {
 		printk(KERN_ERR "riffa: not enough memory to allocate spill buffer\n");
+		kfree(sc->user_irqs);
 		for (i = 0; i < sc->num_chnls; ++i) {
 			pci_free_consistent(dev, sc->sg_buf_size, sc->send[i]->buf_addr, 
 					(dma_addr_t)sc->send[i]->buf_hw_addr);
@@ -1455,6 +1690,7 @@ static int __devinit fpga_probe(struct pci_dev *dev, const struct pci_device_id 
 		kfree(sc->send);
 		free_irq(dev->irq, sc);
 		pci_disable_msi(dev);
+		iounmap(sc->bar2);
 		iounmap(sc->bar0);
 		pci_release_regions(dev);
 		pci_disable_device(dev);
@@ -1474,6 +1710,7 @@ static int __devinit fpga_probe(struct pci_dev *dev, const struct pci_device_id 
 	}
 	if (sc->id == -1) {
 		printk(KERN_ERR "riffa: could not save FPGA information, %d is limit.\n", NUM_FPGAS);
+		kfree(sc->user_irqs);
 		for (i = 0; i < sc->num_chnls; ++i) {
 			pci_free_consistent(dev, sc->sg_buf_size, sc->send[i]->buf_addr, 
 					(dma_addr_t)sc->send[i]->buf_hw_addr);
@@ -1493,6 +1730,7 @@ static int __devinit fpga_probe(struct pci_dev *dev, const struct pci_device_id 
 		pcie_capability_write_dword(dev,PCI_EXP_DEVCTL,devctl_result);
 		free_irq(dev->irq, sc);
 		pci_disable_msi(dev);
+		iounmap(sc->bar2);
 		iounmap(sc->bar0);
 		pci_release_regions(dev);
 		pci_disable_device(dev);
@@ -1527,6 +1765,7 @@ static void __devexit fpga_remove(struct pci_dev *dev)
 	if ((sc = (struct fpga_state *)pci_get_drvdata(dev)) != NULL) {
 		// Free structs, memory regions, etc.
 		atomic_set(&used_fpgas[sc->id], 0);
+		kfree(sc->user_irqs);
 		for (i = 0; i < sc->num_chnls; ++i) {
 			pci_free_consistent(dev, sc->sg_buf_size, sc->send[i]->buf_addr, 
 					(dma_addr_t)sc->send[i]->buf_hw_addr);
@@ -1542,6 +1781,7 @@ static void __devexit fpga_remove(struct pci_dev *dev)
 		pci_free_consistent(dev, SPILL_BUF_SIZE, sc->spill_buf_addr, 
 				(dma_addr_t)sc->spill_buf_hw_addr);
 		free_irq(dev->irq, sc);
+		iounmap(sc->bar2);
 		iounmap(sc->bar0);
 		kfree(sc);
 	}
@@ -1585,35 +1825,86 @@ static const struct file_operations fpga_fops = {
  */
 static int __init fpga_init(void) 
 {	
-	int i;
+	int i, j;
 	int error;
+	int minors = 1;
+	dev_t device;
 
+	//initialize var's
 	for (i = 0; i < NUM_FPGAS; i++)
 		atomic_set(&used_fpgas[i], 0);
 
+	//register pci device
 	error = pci_register_driver(&fpga_driver);
 	if (error != 0) {
-		printk(KERN_ERR "riffa: pci_module_register returned %d\n", error);
-		return (error);
+		printk(KERN_ERR "riffa: pci_register_driver failed %d\n", error);
+		goto fail_pci_register_driver;
 	}
 
-	error = register_chrdev(MAJOR_NUM, DEVICE_NAME, &fpga_fops);
-	if (error < 0) {
-		printk(KERN_ERR "riffa: register_chrdev returned %d\n", error);
-		return (error);
+	//add char dev
+#if USER_IRQS > 0
+	minors += USER_IRQS * NUM_FPGAS;
+#endif
+	error = alloc_chrdev_region(&mymodule_devt, 0, minors, DEVICE_NAME);
+	if(error < 0) {
+		printk(KERN_ERR "riffa: alloc_chrdev_region failed %d\n", error);
+		goto fail_alloc_chrdev_region;
 	}
 
+    //root device
+	DEBUG_MSG(KERN_INFO "riffa: create root char device\n");
+	cdev_init(&mymodule_cdev, &fpga_fops);
+	error = cdev_add(&mymodule_cdev, mymodule_devt, 1);
+	if(error < 0) {
+		printk(KERN_ERR "riffa: cdev_add failed %d", error);
+		goto fail_add_cdev;
+	}
+	
+	//irq device
+	DEBUG_MSG(KERN_INFO "riffa: create irq char devices\n");
+	cdev_init(&mymodule_irq_cdevs, &irq_fops);
+	device = MKDEV(MAJOR(mymodule_devt), 1);
+	error = cdev_add(&mymodule_irq_cdevs, device, NUM_FPGAS * USER_IRQS);
+	if(error < 0) {
+		printk(KERN_ERR "riffa: irq cdev_add failed %d", error);
+		goto fail_irq_add_cdev;
+	}
+
+	//create class and device file
+	DEBUG_MSG(KERN_INFO "riffa: create class\n");
 	mymodule_class = class_create(THIS_MODULE, DEVICE_NAME);
 	if (IS_ERR(mymodule_class)) {
 		error = PTR_ERR(mymodule_class);
-		printk(KERN_ERR "riffa: class_create() returned %d\n", error);
-		return (error);
+		printk(KERN_ERR "riffa: class_create failed %d\n", error);
+		goto fail_create_class;
 	}
 
-	devt = MKDEV(MAJOR_NUM, 0);
-	device_create(mymodule_class, NULL, devt, "%s", DEVICE_NAME);
+	DEBUG_MSG(KERN_INFO "riffa: create root device file");
+	device_create(mymodule_class, NULL, mymodule_devt, NULL, DEVICE_NAME);
+#if USER_IRQS > 0
+	for(i = 0; i < NUM_FPGAS; i++) {
+		for(j = 0; j < USER_IRQS; j++) {
+			device = MKDEV(MAJOR(mymodule_devt), 1+i*USER_IRQS+j);
+			DEBUG_MSG(KERN_INFO "riffa: create fpga %d irq %d device file", i, j);
+			device_create(mymodule_class, NULL, device, NULL, DEVICE_IRQ_NAME, i, j);
+		}
+	}
+#endif
 
 	return 0;
+
+//fail_create_device:
+//    class_destroy(mymodule_class);
+fail_create_class:
+	cdev_del(&mymodule_irq_cdevs);
+fail_irq_add_cdev:
+    cdev_del(&mymodule_cdev);
+fail_add_cdev:
+    unregister_chrdev_region(mymodule_devt, minors);
+fail_alloc_chrdev_region:
+	pci_unregister_driver(&fpga_driver);
+fail_pci_register_driver:
+    return error;
 }
 
 /**
@@ -1621,10 +1912,30 @@ static int __init fpga_init(void)
  */
 static void __exit fpga_exit(void)
 {
-	device_destroy(mymodule_class, devt); 
+	int minors = 1;
+	int i, j;
+	dev_t device;
+
+#if USER_IRQS > 0
+	for(i = 0; i < NUM_FPGAS; i++) {
+		for(j = 0; j < USER_IRQS; j++) {
+			device = MKDEV(MAJOR(mymodule_devt), 1+i*USER_IRQS+j);
+			device_destroy(mymodule_class, device);
+		}
+	}
+	cdev_del(&mymodule_irq_cdevs);
+#endif
+	device_destroy(mymodule_class, mymodule_devt);
+	cdev_del(&mymodule_irq_cdevs);
+
 	class_destroy(mymodule_class);
 	pci_unregister_driver(&fpga_driver);
-	unregister_chrdev(MAJOR_NUM, DEVICE_NAME);
+
+#if USER_IRQS > 0
+	minors += USER_IRQS * NUM_FPGAS;
+#endif
+	unregister_chrdev_region(mymodule_devt, minors);
+	DEBUG_MSG(KERN_INFO "riffa: module removed\n");
 }
 
 module_init(fpga_init);

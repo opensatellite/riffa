@@ -1,0 +1,5 @@
+100Hz
+
+./riffa_axi 4 2494000
+./riffa_axi 0 150
+

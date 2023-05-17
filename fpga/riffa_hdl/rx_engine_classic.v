@@ -113,6 +113,7 @@ module rx_engine_classic
     wire [C_PCI_DATA_WIDTH-1:0]               _RXC_DATA;
     wire [C_PCI_DATA_WIDTH-1:0]               _RXR_DATA;
     wire [(C_RX_PIPELINE_DEPTH+1)*C_PCI_DATA_WIDTH-1:0] wRxSrData;
+    wire [(C_RX_PIPELINE_DEPTH+1)*`SIG_BARDECODE_W-1:0] wRxSrBarDecode;
     wire [C_RX_PIPELINE_DEPTH:0]                        wRxSrSop;
     wire [C_RX_PIPELINE_DEPTH:0]                        wRxSrEop;
     wire [(C_RX_PIPELINE_DEPTH+1)*`SIG_OFFSET_W-1:0]    wRxSrEoff;
@@ -164,6 +165,23 @@ module rx_engine_classic
          // Inputs
          .CLK                           (CLK));
 
+// rx_bar_decode Shift Register. 
+    shiftreg 
+            #(// Parameters
+              .C_DEPTH                      (C_RX_PIPELINE_DEPTH),
+              .C_WIDTH                      (`SIG_BARDECODE_W),
+              .C_VALUE                      (0)
+              /*AUTOINSTPARAM*/)
+    rx_bar_decode_shiftreg_inst
+        (// Outputs
+         .RD_DATA                       (wRxSrBarDecode),
+         // Inputs
+         .WR_DATA                       (RX_TLP_BAR_DECODE),
+         .RST_IN                        (0),
+         /*AUTOINST*/
+         // Inputs
+         .CLK                           (CLK));
+             
     // Start Flag Shift Register. Data enables are derived from the
     // taps on this shift register.
     shiftreg 
@@ -268,6 +286,7 @@ module rx_engine_classic
                 (
                  // Inputs
                  .RX_SR_DATA            (wRxSrData),
+                 .RX_SR_BARDECODE       (wRxSrBarDecode),
                  .RX_SR_EOP             (wRxSrEop),
                  .RX_SR_END_OFFSET      (wRxSrEoff),
                  .RX_SR_SOP             (wRxSrSop),
@@ -305,7 +324,8 @@ module rx_engine_classic
                  .RX_TLP_START_OFFSET   (RX_TLP_START_OFFSET[`SIG_OFFSET_W-1:0]),
                  .RX_TLP_END_FLAG       (RX_TLP_END_FLAG),
                  .RX_TLP_END_OFFSET     (RX_TLP_END_OFFSET[`SIG_OFFSET_W-1:0]),
-                 .RX_TLP_BAR_DECODE     (RX_TLP_BAR_DECODE[`SIG_BARDECODE_W-1:0]));
+                 .RX_TLP_BAR_DECODE     (RX_TLP_BAR_DECODE[`SIG_BARDECODE_W-1:0])
+                 );
 
             rxc_engine_128
                 #(/*AUTOINSTPARAM*/
@@ -363,6 +383,7 @@ module rx_engine_classic
                 (
                  // Inputs
                  .RX_SR_DATA                       (wRxSrData),
+                 .RX_SR_BARDECODE                  (wRxSrBarDecode),
                  .RX_SR_EOP                        (wRxSrEop),
                  .RX_SR_END_OFFSET                 (wRxSrEoff),
                  .RX_SR_SOP                        (wRxSrSop),

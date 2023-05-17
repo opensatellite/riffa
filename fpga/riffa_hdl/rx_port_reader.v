@@ -498,8 +498,40 @@ always @ (*) begin
 	else
 		_rErr = (rErr | (RX_DONE & RX_ERR) | (SG_DONE & SG_ERR));
 end
-
-
+/*
+ila_0 rx_port_reader_ila(
+	.clk(CLK),
+    .probe0({ 
+        CHNL_RX,
+        TXN_DATA_FLUSHED,
+        MAIN_FIFO_FULL,
+        rSpaceAvail, //1
+        rDoneLen,   //32
+        //total 48
+        CHNL_RX_RECVD,
+        CHNL_RX_ACK_RECVD,
+		SG_ELEM_RDY, // 1
+		rSgRen, // 1
+		rLastDoneRead, // 1
+		rLen, // 10
+		rAckCount, // 11
+		rPartWordsRecvd, // 1
+		rReqPartialDone, // 1
+		rPartialDone, // 1
+		rTxnDone, // 1
+		rRxState, // 8
+		TXN_LEN_VALID, // 1
+		TXN_DONE_ACK, // 1
+		TXN_DONE,	//1
+		TXN_ERR,	//1
+		rMainState // 6
+		}),
+	.probe1({rRecvdWords, rReadWords}),
+    .probe2({rWords, rPartWords}),
+	.probe3({rRequestingWords, rAvailWords}),
+    .probe4(CHNL_RX_CONSUMED)
+);
+*/
 
 /*
 wire [35:0] wControl0;
@@ -538,5 +570,7 @@ chipscope_ila_t8_512 a0(
 			rMainState}) // 6
 );
 */
+
+
 
 endmodule
